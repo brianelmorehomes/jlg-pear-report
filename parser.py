@@ -130,9 +130,18 @@ def parse_remine_pdf(file_bytes):
         data["parse_warnings"].append("Could not find the status/address header line on any page.")
 
     # ---- Stat line: beds/baths/sqft/acres/value/equity/type ----
+    # The middle-dot/pipe dividers between segments ("4 Beds · 2 Baths ·
+    # ... | $774,000 Est Value ...") aren't always present -- one real
+    # report came through with the "|" before Est Value simply missing
+    # (just whitespace in its place), which broke an earlier version of
+    # this regex that required exactly one non-whitespace divider
+    # character at every junction. Each `\S?` below is now optional
+    # (0 or 1 divider char) instead of mandatory, so a report that drops
+    # a divider glyph for whatever reason still parses instead of
+    # failing this regex entirely and leaving every field blank.
     stat_m = re.search(
-        r"(\d+)\s*Beds?\s*\S\s*(\d+)\s*Baths?\s*\S\s*([\d,]+)\s*SF\s*\S\s*([\d.]+)\s*Acres\s*\S\s*"
-        r"\$([\d,]+)\s*Est Value\s*\S\s*\$([\d,]+)\s*Net Equity\s*\S\s*(.+)",
+        r"(\d+)\s*Beds?\s*\S?\s*(\d+)\s*Baths?\s*\S?\s*([\d,]+)\s*SF\s*\S?\s*([\d.]+)\s*Acres\s*\S?\s*"
+        r"\$([\d,]+)\s*Est Value\s*\S?\s*\$([\d,]+)\s*Net Equity\s*\S?\s*(.+)",
         full_text,
     )
     if stat_m:
@@ -142,7 +151,13 @@ def parse_remine_pdf(file_bytes):
         data["lot_acres"] = _to_number(stat_m.group(4))
         data["value_est"] = _to_int_money(stat_m.group(5))
         data["net_equity_est"] = _to_int_money(stat_m.group(6))
-        data["property_type"] = _clean_ws(stat_m.group(7))
+        prop_type_raw = _clean_ws(stat_m.group(7))
+        # Some reports tack extra segments onto the end of the stat line
+        # after the property type (e.g. "Single Family Residential | HOA
+        # $370") -- strip anything from a trailing "HOA $..." marker
+        # onward so it doesn't get displayed as part of the property type.
+        prop_type_raw = re.split(r"\s*\S?\s*HOA\s*\$", prop_type_raw)[0].strip()
+        data["property_type"] = prop_type_raw
     else:
         for k in ("beds", "baths", "sqft", "lot_acres", "value_est", "net_equity_est"):
             data[k] = None
@@ -172,9 +187,31 @@ def parse_remine_pdf(file_bytes):
     data["percent_equity"] = _to_int_money(_first(r"Percent Equity\s+(\d+)%\s*est\.", full_text))
 
     # ---- Active Mortgage block (may not exist -- paid-off property) ----
-    mort_start = full_text.find("Active Mortgage")
+    # Some reports have a refi/2nd-lien history and print BOTH "Active
+    # Mortgage" (the current/primary loan) and "Active Mortgage 2" (an
+    # older or secondary lien) -- and thanks to a 2-column page layout
+    # that pdfplumber's linear text extraction doesn't preserve, the
+    # FIRST "Active Mortgage" heading in the raw text can land on a
+    # broken/interleaved fragment (mixed in with Flood Risk column data)
+    # rather than the real, data-rich block. The real block consistently
+    # shows up as the LAST "Active Mortgage" heading before "Active
+    # Mortgage 2" (or the last one overall, for the common single-loan
+    # case). Scoping the chunk to end at whichever of "Active Mortgage 2"
+    # / "Flood Risk" / "Valuation" comes first afterward keeps this block
+    # from ever bleeding into the second lien's details (e.g. accidentally
+    # showing the 2nd lien's lender as if it were the primary loan's).
+    am_heading_positions = [m.start() for m in re.finditer(r"Active Mortgage(?!\s*2)\b", full_text)]
+    mort_start = am_heading_positions[-1] if am_heading_positions else -1
     if mort_start != -1:
-        mort_end = full_text.find("Flood Risk", mort_start)
+        boundary_candidates = [
+            pos for pos in (
+                full_text.find("Active Mortgage 2", mort_start + 1),
+                full_text.find("Flood Risk", mort_start + len("Active Mortgage")),
+                full_text.find("Valuation", mort_start),
+            )
+            if pos != -1
+        ]
+        mort_end = min(boundary_candidates) if boundary_candidates else -1
         mort_chunk = full_text[mort_start: mort_end if mort_end != -1 else mort_start + 500]
         data["mortgage_orig_amount"] = _to_int_money(_first(r"Orig\.\s*Amount\s+\$([\d,]+)", mort_chunk))
         data["mortgage_term_years"] = _to_int_money(_first(r"Loan Term\s+(\d+)\s*Yrs", mort_chunk))
@@ -185,6 +222,13 @@ def parse_remine_pdf(file_bytes):
             data["mortgage_lender"] = _clean_ws(lender_m.group(1))
         else:
             data["mortgage_lender"] = ""
+        if "Active Mortgage 2" in full_text:
+            data["parse_warnings"].append(
+                "This property shows more than one loan on record (a refinance and/or "
+                "2nd lien). The loan-detail fields above reflect only the primary loan -- "
+                "the mortgage balance used for the equity math already combines both, but "
+                "double-check the loan details before sending."
+            )
     else:
         data["mortgage_orig_amount"] = None
         data["mortgage_term_years"] = None
@@ -194,21 +238,38 @@ def parse_remine_pdf(file_bytes):
         data["parse_warnings"].append("No active mortgage found on record (property may be paid off, or the loan simply isn't in public filings).")
 
     # ---- Valuation block: 3 AVMs (First American / Zillow / Remine) ----
+    # NOTE: this table can get split across a page break -- the "Est.
+    # Value" row lands on one page and the "Range" row(s) land after a
+    # repeated header/footer on the next, and that repeated header carries
+    # its OWN dollar amounts (the stat line's "$X Est Value \xb7 $Y Net
+    # Equity \xb7 HOA $Z"). An earlier version of this parser grabbed every
+    # "$..." token in the chunk and assumed a fixed position for each of
+    # the 9 values (est/est/est/low/high/low/high/low/high) -- that broke
+    # silently (no warning, just visibly wrong numbers) whenever the
+    # header's stray dollar amounts landed inside the window, shifting
+    # every value after them by one or more slots. Anchoring on the
+    # literal "Est. Value" / "Range" keywords instead means only real
+    # table cells ever get captured, regardless of what unrelated dollar
+    # figures happen to sit between them.
     val_start = full_text.find("Valuation\nFirst American")
     val_end = full_text.find("Property History", val_start) if val_start != -1 else -1
     if val_start != -1:
-        val_chunk = full_text[val_start: val_end if val_end != -1 else val_start + 400]
-        amounts = re.findall(r"\$([\d,]+(?:\.\d+)?)", val_chunk)
-        amounts = [_to_int_money(a) for a in amounts]
+        val_chunk = full_text[val_start: val_end if val_end != -1 else val_start + 600]
+        ests = [_to_int_money(a) for a in re.findall(r"Est\.\s*Value\s+\$([\d,]+(?:\.\d+)?)", val_chunk)]
+        ranges = [
+            (_to_int_money(lo), _to_int_money(hi))
+            for lo, hi in re.findall(r"Range\s+\$([\d,]+(?:\.\d+)?)\s*-\s*\$([\d,]+(?:\.\d+)?)", val_chunk)
+        ]
         keys = ["first_american", "zillow", "remine"]
         data["valuations"] = {}
-        if len(amounts) >= 9:
+        if len(ests) >= 3:
             for i, key in enumerate(keys):
-                data["valuations"][key] = {
-                    "est": amounts[i],
-                    "low": amounts[3 + i * 2],
-                    "high": amounts[4 + i * 2],
-                }
+                entry = {"est": ests[i], "low": None, "high": None}
+                if len(ranges) >= 3:
+                    entry["low"], entry["high"] = ranges[i]
+                data["valuations"][key] = entry
+            if len(ranges) < 3:
+                data["parse_warnings"].append("Found all 3 AVM estimates but not all 3 low/high ranges -- ranges left blank, please check the source report.")
         else:
             data["parse_warnings"].append("Could not fully parse the 3-AVM valuation table.")
     else:
