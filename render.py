@@ -60,7 +60,6 @@ def render_pear(fields, computed, output_path, agent_name="Brian Elmore", agent_
         logo_jlg=JLG_BLOCK,
         logo_brokerage=BROKERAGE_LOCKUP_BW if print_safe_logo else BROKERAGE_LOCKUP,
         agent_name=agent_name,
-        agent_first_name=agent_name.split()[0] if agent_name.split() else agent_name,
         agent_phone=agent_phone,
         agent_email=agent_email or "brian@justinlucasgroup.com",
         prepared_date=datetime.date.today().strftime("%B %-d, %Y"),
