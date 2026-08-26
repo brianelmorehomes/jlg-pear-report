@@ -101,15 +101,33 @@ def parse_remine_pdf(file_bytes):
     }
 
     # ---- Header line: "Off-Market 5541 N MAGNOLIA AVE CHICAGO IL 60640" ----
-    first_line = (page1.split("\n") or [""])[0]
-    m = re.match(r"^(.*?)\s+(\d+\s+\S.*)$", first_line)
-    if m:
-        data["status"] = _clean_ws(m.group(1))
-        data["full_address"] = _clean_ws(m.group(2))
+    # This running header repeats as the first line of every page in the
+    # "Public Record Full" print view, starting from page 1. But other
+    # print views (e.g. "Agent Full", which some properties only offer --
+    # Public Record Full isn't available for every record) insert a plain
+    # cover page in front of it instead ("Report Created on [date]" /
+    # address / agent info, no status+address combo line at all), pushing
+    # the real running header to page 2 or later. Rather than assume it's
+    # always page 1, scan every page's first line and use the first one
+    # that actually matches the pattern -- cheap, and works for both
+    # layouts without needing to hard-code which print view produced the
+    # upload.
+    header_m = None
+    for pg in pages_text:
+        if not pg:
+            continue
+        line0 = pg.split("\n")[0]
+        m = re.match(r"^(.*?)\s+(\d+\s+\S.*)$", line0)
+        if m:
+            header_m = m
+            break
+    if header_m:
+        data["status"] = _clean_ws(header_m.group(1))
+        data["full_address"] = _clean_ws(header_m.group(2))
     else:
         data["status"] = ""
-        data["full_address"] = _clean_ws(first_line)
-        data["parse_warnings"].append("Could not split status from address on header line.")
+        data["full_address"] = ""
+        data["parse_warnings"].append("Could not find the status/address header line on any page.")
 
     # ---- Stat line: beds/baths/sqft/acres/value/equity/type ----
     stat_m = re.search(

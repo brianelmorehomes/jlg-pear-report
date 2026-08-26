@@ -185,11 +185,14 @@ PAGE = """
       <ol style="font-size:.82rem;color:var(--text);line-height:1.6;margin:10px 0 4px;padding-left:20px;">
         <li>In MRED, open Remine and search the property address.</li>
         <li>Open the property record, then click the print icon.</li>
-        <li>Under <strong>Choose Print View</strong>, select <strong>Public Record Full</strong>.</li>
+        <li>Under <strong>Choose Print View</strong>, select <strong>Public Record Full</strong> if it's available.</li>
         <li>Under <strong>Select which sections you would like to appear</strong>, check: <strong>Public Record</strong>, <strong>Valuation</strong>, <strong>Property History</strong>, and <strong>Associated People</strong>. Leave Schools and Demographics unchecked.</li>
         <li>Under <strong>and of the valuations, which ones do you want to show?</strong>, check all three: <strong>First American</strong>, <strong>Remine</strong>, and <strong>Zestimate</strong>.</li>
         <li>Click <strong>Print</strong> and save as a PDF, then upload that file below.</li>
       </ol>
+      <div class="helper" style="margin-top:8px;">
+        <strong>Public Record Full isn't available on every property.</strong> If it's missing from the dropdown, pick <strong>Agent Full</strong> instead — it works fine here too, it just can't limit itself to only those four sections (Listing Details, Property Images, Schools, and Demographics will get pulled in too, and can't be unchecked). That's harmless, just a few extra pages; make sure Valuation, Property History, and Associated People are still checked, and all three valuation sources (First American, Remine, Zestimate) are checked.
+      </div>
     </details>
     <div id="dropzone">
       <p><strong>Drag &amp; drop the Remine PDF here</strong></p>
