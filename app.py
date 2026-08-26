@@ -103,6 +103,8 @@ PAGE = """
   .card h2 { font-size: 1.15rem; color: var(--blue); font-family: 'Plus Jakarta Sans'; font-weight: 700; display: flex; align-items: center; margin-bottom: 16px; }
   #dropzone { border: 2px dashed var(--border-b); border-radius: var(--rl); padding: 32px 20px; text-align:center; color: var(--blue); cursor:pointer; transition: border-color var(--d) var(--ease), background var(--d) var(--ease); }
   #dropzone:hover, #dropzone.drag { border-color: var(--blue); background: var(--slate); }
+  #dropzone.locked { cursor: default; background: var(--slate); border-style: solid; border-color: var(--border); color: var(--text); }
+  #dropzone.locked:hover { border-color: var(--border); background: var(--slate); }
   #dropzone p { margin: 6px 0; font-size: .92rem; }
   #dropzone .hint { font-size:.8rem; color:var(--muted); }
   input[type=file] { display:none; }
@@ -170,7 +172,7 @@ PAGE = """
     <div class="row">
       <div class="field">
         <label>Client name (shown on report)</label>
-        <input type="text" id="clientName" placeholder="e.g. Nathan Jenks and Mark Umiel">
+        <input type="text" id="clientName" placeholder="e.g. John and Jane Doe">
       </div>
     </div>
     <div class="field helper">This defaults from the report's public-record owner name once you upload &mdash; edit it to whatever you'd like shown (nickname, "the Jenks Family," etc).</div>
@@ -178,13 +180,24 @@ PAGE = """
 
   <div class="card">
     <h2><span class="step-num">2</span>Upload Remine report</h2>
+    <details style="margin-bottom:16px;border:1.5px solid var(--border-b);border-radius:var(--r);padding:12px 14px;">
+      <summary style="cursor:pointer;font-weight:700;color:var(--blue);font-size:.85rem;">How to pull the right report from Remine</summary>
+      <ol style="font-size:.82rem;color:var(--text);line-height:1.6;margin:10px 0 4px;padding-left:20px;">
+        <li>In MRED, open Remine and search the property address.</li>
+        <li>Open the property record, then click the print icon.</li>
+        <li>Under <strong>Choose Print View</strong>, select <strong>Public Record Full</strong>.</li>
+        <li>Under <strong>Select which sections you would like to appear</strong>, check: <strong>Public Record</strong>, <strong>Valuation</strong>, <strong>Property History</strong>, and <strong>Associated People</strong>. Leave Schools and Demographics unchecked.</li>
+        <li>Under <strong>and of the valuations, which ones do you want to show?</strong>, check all three: <strong>First American</strong>, <strong>Remine</strong>, and <strong>Zestimate</strong>.</li>
+        <li>Click <strong>Print</strong> and save as a PDF, then upload that file below.</li>
+      </ol>
+    </details>
     <div id="dropzone">
       <p><strong>Drag &amp; drop the Remine PDF here</strong></p>
       <p class="hint">or click to browse &mdash; one property at a time</p>
       <input type="file" id="fileInput" accept="application/pdf">
     </div>
     <div class="field helper" style="margin-top:10px;">
-      This needs the 4-page Remine public-records report (the one branded "Courtesy of [Agent Name]," with Active Mortgage, Net Equity, and a 3-source Valuation table) &mdash; not an RPR report, which doesn't carry loan/equity data.
+      This needs the Remine public-records report (branded "Courtesy of [Agent Name]," with Active Mortgage, Net Equity, and a 3-source Valuation table) &mdash; not an RPR report, which doesn't carry loan/equity data.
     </div>
     <div id="status"></div>
   </div>
@@ -209,7 +222,11 @@ PAGE = """
 
     <div class="section-divider">Valuation &amp; Equity</div>
     <div class="row">
-      <div class="field"><label>Estimated market value</label><input type="text" id="f_value"></div>
+      <div class="field">
+        <label>Estimated market value</label>
+        <input type="text" id="f_value">
+        <div class="helper" id="avmHelper"></div>
+      </div>
       <div class="field"><label>Estimated mortgage balance</label><input type="text" id="f_loan_balance"></div>
     </div>
     <div class="row">
@@ -225,6 +242,16 @@ PAGE = """
         <div class="helper">Defaults to ~25% above current value &mdash; change this to whatever price range the client is actually considering.</div>
       </div>
     </div>
+
+    <input type="hidden" id="f_avm_fa_est">
+    <input type="hidden" id="f_avm_fa_low">
+    <input type="hidden" id="f_avm_fa_high">
+    <input type="hidden" id="f_avm_zillow_est">
+    <input type="hidden" id="f_avm_zillow_low">
+    <input type="hidden" id="f_avm_zillow_high">
+    <input type="hidden" id="f_avm_remine_est">
+    <input type="hidden" id="f_avm_remine_low">
+    <input type="hidden" id="f_avm_remine_high">
 
     <div id="livePreview" style="margin-top:16px;font-size:.85rem;color:var(--muted);"></div>
 
@@ -246,14 +273,39 @@ const generateBtn = document.getElementById('generateBtn');
 const reparseBtn = document.getElementById('reparseBtn');
 
 const FIELD_IDS = ['full_address','beds','baths','sqft','year_built','property_type','status_text',
-                    'value','loan_balance','last_purchase_price','last_purchase_year','target_price'];
+                    'value','loan_balance','last_purchase_price','last_purchase_year','target_price',
+                    'avm_fa_est','avm_fa_low','avm_fa_high','avm_zillow_est','avm_zillow_low','avm_zillow_high',
+                    'avm_remine_est','avm_remine_low','avm_remine_high'];
 
-dz.addEventListener('click', () => fileInput.click());
-dz.addEventListener('dragover', e => { e.preventDefault(); dz.classList.add('drag'); });
+// Tracks the last value THIS SCRIPT auto-filled into each field, so a
+// second /parse response (e.g. an accidental second click on the
+// dropzone, or a stray drag/drop) can be told apart from a value the
+// agent deliberately typed in. Only overwrites a field on re-parse if
+// its current value still matches what was auto-filled last time --
+// otherwise an edit like correcting a misspelled client name would get
+// silently wiped out the moment a second parse fires. See the Cowork
+// conversation this was fixed in for the real report that surfaced it.
+let lastAutoFill = {};
+
+let hasUploaded = false;
+
+dz.addEventListener('click', () => { if (!hasUploaded) fileInput.click(); });
+dz.addEventListener('dragover', e => { if (hasUploaded) return; e.preventDefault(); dz.classList.add('drag'); });
 dz.addEventListener('dragleave', () => dz.classList.remove('drag'));
-dz.addEventListener('drop', e => { e.preventDefault(); dz.classList.remove('drag'); if (e.dataTransfer.files.length) handleFile(e.dataTransfer.files[0]); });
+dz.addEventListener('drop', e => {
+  e.preventDefault(); dz.classList.remove('drag');
+  if (hasUploaded) return; // dropzone is locked once a file's been parsed -- use "Start over" instead
+  if (e.dataTransfer.files.length) handleFile(e.dataTransfer.files[0]);
+});
 fileInput.addEventListener('change', () => { if (fileInput.files.length) handleFile(fileInput.files[0]); fileInput.value=''; });
-reparseBtn.addEventListener('click', () => { reviewCard.classList.add('hidden'); statusEl.textContent=''; });
+reparseBtn.addEventListener('click', () => {
+  hasUploaded = false;
+  lastAutoFill = {};
+  dz.classList.remove('locked');
+  dz.innerHTML = '<p><strong>Drag &amp; drop the Remine PDF here</strong></p><p class="hint">or click to browse &mdash; one property at a time</p>';
+  reviewCard.classList.add('hidden');
+  statusEl.textContent = '';
+});
 
 function handleFile(file) {
   const form = new FormData();
@@ -265,6 +317,9 @@ function handleFile(file) {
       if (data.error) { statusEl.textContent = 'Error: ' + data.error; return; }
       statusEl.textContent = 'Parsed ' + (data.full_address || 'report') + '. Review below before generating.';
       populateReview(data);
+      hasUploaded = true;
+      dz.classList.add('locked');
+      dz.innerHTML = '<p><strong>Uploaded:</strong> ' + file.name + '</p><p class="hint">Use "Start over" below to upload a different report</p>';
       reviewCard.classList.remove('hidden');
       reviewCard.scrollIntoView({behavior:'smooth'});
       updatePreview();
@@ -272,25 +327,52 @@ function handleFile(file) {
     .catch(err => { statusEl.textContent = 'Error: ' + err; });
 }
 
+// Sets a review-form field to a new auto-filled default UNLESS the agent
+// has already changed it away from the previous auto-fill (see
+// lastAutoFill comment above).
+function smartSet(id, newValue) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  const current = el.value ?? '';
+  const previousAuto = lastAutoFill[id] ?? '';
+  if (current === '' || current === previousAuto) {
+    el.value = newValue ?? '';
+  }
+  lastAutoFill[id] = el.value;
+}
+
 function populateReview(data) {
-  document.getElementById('clientName').value = data.owner_names_display || '';
-  document.getElementById('f_full_address').value = data.full_address || '';
-  document.getElementById('f_beds').value = data.beds ?? '';
-  document.getElementById('f_baths').value = data.baths ?? '';
-  document.getElementById('f_sqft').value = data.sqft ?? '';
-  document.getElementById('f_year_built').value = data.year_built ?? '';
-  document.getElementById('f_property_type').value = data.property_type || '';
-  document.getElementById('f_status_text').value = data.status || 'Off-Market';
-  document.getElementById('f_value').value = data.value_est ?? '';
-  document.getElementById('f_loan_balance').value = data.loan_balance_est ?? '';
-  document.getElementById('f_last_purchase_price').value = data.last_sale_price ?? '';
+  smartSet('clientName', data.owner_names_display || '');
+  smartSet('f_full_address', data.full_address || '');
+  smartSet('f_beds', data.beds ?? '');
+  smartSet('f_baths', data.baths ?? '');
+  smartSet('f_sqft', data.sqft ?? '');
+  smartSet('f_year_built', data.year_built ?? '');
+  smartSet('f_property_type', data.property_type || '');
+  smartSet('f_status_text', data.status || 'Off-Market');
+  smartSet('f_value', (data.value_est_avg ?? data.value_est) ?? '');
+  smartSet('f_loan_balance', data.loan_balance_est ?? '');
+  smartSet('f_last_purchase_price', data.last_sale_price ?? '');
   let year = '';
   if (data.last_sale_date) {
     const parts = data.last_sale_date.split('/');
     if (parts.length === 3) { let yy = parseInt(parts[2],10); year = (yy < 50 ? 2000+yy : 1900+yy); }
   }
-  document.getElementById('f_last_purchase_year').value = year;
-  document.getElementById('f_target_price').value = data.suggested_target_price ?? '';
+  smartSet('f_last_purchase_year', year);
+  smartSet('f_target_price', data.suggested_target_price ?? '');
+
+  const avm = data.valuations || {};
+  const fa = avm.first_american || {}, zi = avm.zillow || {}, re = avm.remine || {};
+  smartSet('f_avm_fa_est', fa.est ?? ''); smartSet('f_avm_fa_low', fa.low ?? ''); smartSet('f_avm_fa_high', fa.high ?? '');
+  smartSet('f_avm_zillow_est', zi.est ?? ''); smartSet('f_avm_zillow_low', zi.low ?? ''); smartSet('f_avm_zillow_high', zi.high ?? '');
+  smartSet('f_avm_remine_est', re.est ?? ''); smartSet('f_avm_remine_low', re.low ?? ''); smartSet('f_avm_remine_high', re.high ?? '');
+
+  const avmHelper = document.getElementById('avmHelper');
+  const parts2 = [];
+  if (fa.est) parts2.push('First American ' + fa.est.toLocaleString());
+  if (zi.est) parts2.push('Zillow ' + zi.est.toLocaleString());
+  if (re.est) parts2.push('Remine ' + re.est.toLocaleString());
+  avmHelper.textContent = parts2.length ? 'Defaulted to the average of: ' + parts2.map(p => '$' + p).join(', ') + '. All three will show on the PDF.' : '';
 
   warnBox.innerHTML = '';
   if (data.parse_warnings && data.parse_warnings.length) {
@@ -366,7 +448,13 @@ def parse():
         return jsonify({"error": "No file uploaded"}), 400
     try:
         data = detect_and_parse(f.read(), f.filename or "report.pdf")
-        value = data.get("value_est")
+        # Default the report's headline value to the average of whatever AVM
+        # estimates were found (Brian's call -- see the Cowork conversation:
+        # Remine's own "$X Est Value" stat-line figure is NOT an average, it's
+        # just whichever single source Remine chose to feature, which in
+        # testing exactly mirrored the First American AVM alone). Falls back
+        # to that headline figure only if no AVM table was found at all.
+        value = data.get("value_est_avg") or data.get("value_est")
         data["suggested_target_price"] = suggested_target_price(value)
         return jsonify(data)
     except Exception as e:
@@ -400,6 +488,17 @@ def generate():
             target_price=target_price,
         )
 
+        avms = []
+        for label, prefix in (("First American", "avm_fa"), ("Zillow", "avm_zillow"), ("Remine", "avm_remine")):
+            est = _num(request.form.get(f"{prefix}_est"))
+            if est is not None:
+                avms.append({
+                    "label": label,
+                    "est": est,
+                    "low": _num(request.form.get(f"{prefix}_low")),
+                    "high": _num(request.form.get(f"{prefix}_high")),
+                })
+
         fields = {
             "client_name": request.form.get("client_name", "").strip(),
             "full_address": request.form.get("full_address", "").strip(),
@@ -413,6 +512,7 @@ def generate():
             "loan_balance": loan_balance,
             "last_purchase_price": last_purchase_price,
             "last_purchase_year": request.form.get("last_purchase_year", "").strip(),
+            "avms": avms,
         }
 
         out_name = f"PEAR_{uuid.uuid4().hex[:8]}.pdf"

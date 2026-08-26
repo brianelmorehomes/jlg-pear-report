@@ -196,6 +196,18 @@ def parse_remine_pdf(file_bytes):
     else:
         data["valuations"] = {}
 
+    # ---- Blended value: average of whichever AVM estimates were found.
+    # Remine's own headline "$X Est Value" on the stat line (captured above
+    # as value_est) is NOT an average -- it's just whatever single source
+    # Remine chose to feature (in practice this has been seen to exactly
+    # mirror the First American figure), which could read as one AVM
+    # dressed up as "the" estimate. Brian's call: default the report to
+    # the average of all three sources instead, since that's less swayed
+    # by any one model's quirks. value_est (Remine's own headline number)
+    # is kept separately for reference/comparison, not used as the default.
+    ests = [v["est"] for v in data["valuations"].values() if v.get("est") is not None]
+    data["value_est_avg"] = round(sum(ests) / len(ests)) if ests else None
+
     # ---- Most recent sale (first Transaction block = most recent, Remine
     # sorts Property History newest-first) ----
     ph_start = full_text.find("Property History")

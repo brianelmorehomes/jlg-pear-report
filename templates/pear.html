@@ -38,6 +38,27 @@ body {
   line-height: 1.4;
 }
 
+/* Pins the footer to the bottom of the page regardless of how much
+   content the sections above it hold -- without this, a report with a
+   shorter disclaimers section (or missing optional lines like
+   appreciation/last-purchase, which happens whenever that data wasn't
+   available) leaves a large dead gap between the content and the
+   footer instead of the footer sitting flush at the bottom of the
+   sheet. A flexbox margin-auto approach was tried first but WeasyPrint's
+   flex support didn't actually push the footer down in testing --
+   position:fixed is the reliable way to pin an element to the page box
+   in CSS Paged Media, and since this is always a single page, "fixed"
+   behaves exactly like "pinned to this page's bottom edge." Coordinates
+   are relative to the page's margin box, so bottom:0/left:0/right:0
+   lines up flush with the @page margins declared above. */
+.page-wrap { padding-bottom: 0.7in; } /* keeps normal content from ever running under the fixed footer */
+.footer-pin {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+}
+
 h1, h2, h3 { margin: 0; padding: 0; }
 .serif { font-family: 'Playfair Display', serif; }
 
@@ -148,6 +169,14 @@ h1, h2, h3 { margin: 0; padding: 0; }
   display: inline-block; background: var(--broker-blue); color: #fff; font-size: 7.4pt;
   font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; padding: 2px 7px; border-radius: 2px; margin-right: 6px;
 }
+.avm-table {
+  display: flex; gap: 14px; margin-top: 10px; padding-top: 8px; border-top: 0.75pt solid var(--hairline);
+}
+.avm-col { flex: 1; }
+.avm-col .avm-source { font-size: 7.2pt; text-transform: uppercase; letter-spacing: 0.04em; color: #8a8a8c; }
+.avm-col .avm-est { font-size: 10pt; font-weight: 700; color: var(--broker-blue); margin-top: 1px; }
+.avm-col .avm-range { font-size: 7.2pt; color: #8a8a8c; margin-top: 1px; }
+.avm-note { font-size: 7.4pt; color: #8a8a8c; margin-top: 5px; }
 
 /* ---------- Section 2: Equity Ledger ---------- */
 .equity-wrap { display: flex; gap: 20px; }
@@ -203,6 +232,7 @@ h1, h2, h3 { margin: 0; padding: 0; }
 </style>
 </head>
 <body>
+<div class="page-wrap">
 
 <div class="masthead">
   <div class="lockup-group">
@@ -251,6 +281,18 @@ h1, h2, h3 { margin: 0; padding: 0; }
       This is a marketing-grade estimate, not a formal appraisal &mdash; it's meant to give you a real starting point for a conversation about your options.
     </div>
   </div>
+  {% if f.avms %}
+  <div class="avm-table">
+    {% for avm in f.avms %}
+    <div class="avm-col">
+      <div class="avm-source">{{ avm.label }}</div>
+      <div class="avm-est">{{ avm.est | money }}</div>
+      {% if avm.low and avm.high %}<div class="avm-range">{{ avm.low | money }} &ndash; {{ avm.high | money }}</div>{% endif %}
+    </div>
+    {% endfor %}
+  </div>
+  <div class="avm-note">Estimated Market Value above reflects these automated valuation sources.</div>
+  {% endif %}
 </div>
 
 <!-- SECTION 2: EQUITY BREAKDOWN -->
@@ -308,18 +350,18 @@ h1, h2, h3 { margin: 0; padding: 0; }
   </div>
   <div class="disclaimers">
     <p><b>On loan data:</b> the mortgage balance shown is estimated from public filing history. It does not reflect any recent principal prepayments, refinances, or home equity lines of credit that may not yet be on public record.</p>
-    <p><b>Not an appraisal:</b> this report is a marketing and planning tool, not a formal appraisal or a final transactional net sheet. Actual proceeds at closing depend on your specific loan payoff, selling costs, and market conditions at the time of sale.</p>
+    <p><b>Not an Appraisal or Professional Comparative Market Analysis:</b> if you would like a detailed market analysis, {{ agent_name }} would be happy to provide that for you. Just reach out!</p>
   </div>
 </div>
 
-<div class="footer">
+<div class="footer footer-pin">
   <div>
     <div class="agent">{{ agent_name }}</div>
     <div>{{ agent_phone }}{% if agent_phone and agent_email %} &middot; {% endif %}{{ agent_email }}</div>
   </div>
   <div>Justin Lucas Group &middot; @properties Christie's International Real Estate</div>
 </div>
-<p class="build-credit">&copy; {{ current_year }} Brian Elmore. All rights reserved. This tool may not be reproduced or redistributed without permission.</p>
 
+</div>
 </body>
 </html>
