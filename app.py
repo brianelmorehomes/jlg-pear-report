@@ -9,6 +9,7 @@ Assessment Report, review/edit every field, then generate a branded,
 Run with:  python3 app.py
 Then open: http://localhost:5000
 """
+import datetime
 import io
 import os
 import re
@@ -126,6 +127,131 @@ def _default_fields_from_parsed(data):
     return fields, computed
 
 
+# ---------------------------------------------------------------------
+# Mailer mode: same no-review batch pipeline as above, plus a mail-merged
+# cover letter prepended as page 1 of each property's PDF. These reports
+# are meant to actually go out in the mail, so the bar for "does this
+# look like a real, personal letter" is higher than a normal batch PDF --
+# in particular the greeting can't be allowed to print something that
+# looks broken (a reversed name, a business/trust entity name, a stray
+# initial) on a piece of paper someone is going to physically receive.
+# ---------------------------------------------------------------------
+
+DEFAULT_LETTER_BODY = """I hope this note finds you well. I've been keeping an eye on home values in your area, and the numbers for {{property_address}} were worth sharing.
+
+Enclosed is a complimentary Professional Equity Assessment Report I put together for your property. It brings together current automated valuation estimates, your estimated mortgage balance, and the equity you've likely built, all in one simple snapshot. There's no cost or obligation attached to it -- it's simply information I believe every homeowner should have on hand.
+
+Whether you're thinking about your next move, curious what your options look like, or just enjoy staying informed, I'm always happy to talk through what any of this means for you. No pressure, no pitch -- just reach out whenever it's useful."""
+
+# Business/trust/entity words that should never end up in "Dear ___,"
+# on a mailed letter -- if the parsed owner name contains one of these,
+# it's almost certainly an LLC or corporate entity on title, not a
+# person. "TRUST" is deliberately handled separately below: a personal
+# revocable living trust ("JOHN SMITH TRUST") is extremely common and
+# still names a real person worth greeting by name, but there's no way
+# to tell that apart from a business trust by keyword alone -- so any
+# "TRUST" mention just triggers the safe fallback rather than guessing.
+_ENTITY_NAME_MARKERS = (
+    "LLC", "L.L.C", "ESTATE OF", "BANK", "MORTGAGE",
+    "INC", "INC.", "CORP", "CORPORATION", "CO.", "LP", "L.P",
+    "PROPERTIES", "HOLDINGS", "ASSOCIATES", "PARTNERS",
+)
+
+
+def _safe_greeting_name(owner_names_display, owner_names_raw=None):
+    """Decides whether the parsed owner name is clean enough to print in
+    a mailed letter's greeting and inside address. Remine's public-record
+    names are sometimes reversed, missing a first name (just an initial),
+    or belong to an LLC/trust rather than a person -- any of which would
+    look obviously wrong ("Dear LLC," or "Dear A,") on something that's
+    actually going in someone's mailbox. When in doubt, this falls back
+    to a generic-but-still-professional "Homeowner" rather than risk
+    printing something that looks like a mail-merge error.
+
+    Checks the RAW name (before the First/Last reformatting in parser.py)
+    for entity markers, not just the display name -- that reformatting
+    only ever keeps the first two words of each comma-separated entry, so
+    a word like "TRUST" or "LLC" sitting in the third slot (e.g. "JOSHUA
+    PROZIALECK TRUST") gets silently dropped before it would ever reach
+    this function if only the display name were checked, which would
+    defeat the whole point of this safety net."""
+    name = (owner_names_display or "").strip()
+    if not name:
+        return None
+    if len(name) > 45:
+        return None
+    if any(ch.isdigit() for ch in name):
+        return None
+    if name.isupper():
+        return None
+    combined_upper = f"{name} {owner_names_raw or ''}".upper()
+    if "TRUST" in combined_upper:
+        return None
+    if any(marker in combined_upper for marker in _ENTITY_NAME_MARKERS):
+        return None
+    return name
+
+
+def _split_address_for_letter(full_address):
+    """Remine prints the property address as one unbroken line ('6346 N
+    HERMITAGE AVE CHICAGO IL 60660') with no comma before the city. This
+    is a best-effort split into a street line and a city/state/zip line
+    for the letter's inside-address block, assuming a standard US address
+    ending in 'CITY STATE ZIP' with a single-word city -- true for every
+    sample seen so far (all Chicago). If the pattern doesn't match, or the
+    city turns out to be multi-word, the whole string is used as a single
+    line rather than guessing wrong.
+
+    The street-address group is deliberately GREEDY (.*, not .*?): with a
+    non-greedy group here, the regex engine grabs the shortest possible
+    street match and lets the single-word "city" group absorb everything
+    else it can -- which, for '6350 N HERMITAGE AVE CHICAGO IL 60660',
+    means the direction prefix ("N") gets swallowed into the city instead
+    of staying with the street ('6350' / 'N Hermitage Ave Chicago, IL
+    60660' -- wrong). Greedy correctly leaves exactly one trailing word
+    for the city instead."""
+    addr = (full_address or "").strip()
+    if not addr:
+        return "", ""
+    m = re.match(r"^(.*)\s+([A-Za-z]+)\s+([A-Z]{2})\s+(\d{5}(?:-\d{4})?)$", addr)
+    if not m:
+        return addr, ""
+    street, city, state, zip_code = m.groups()
+    return street.strip().title(), f"{city.strip().title()}, {state} {zip_code}"
+
+
+def _build_letter(data, fields, letter_template, agent_name):
+    """Builds the `letter` dict render_pear()/pear.html expects, for one
+    property, by mail-merging letter_template (the shared, agent-edited
+    text from the Mailer mode textarea) against this property's parsed
+    data. Returns (letter_dict, used_fallback_greeting: bool) so the
+    calling route can flag which properties got the generic greeting in
+    the batch summary."""
+    owner_name = data.get("owner_names_display") or ""
+    safe_name = _safe_greeting_name(owner_name, data.get("owner_names_raw"))
+    used_fallback = safe_name is None
+    greeting_name = safe_name or "Homeowner"
+
+    address_line1, address_line2 = _split_address_for_letter(fields.get("full_address"))
+    property_address = fields.get("full_address") or "your property"
+
+    merged = (letter_template or DEFAULT_LETTER_BODY)
+    merged = merged.replace("{{owner_name}}", greeting_name)
+    merged = merged.replace("{{property_address}}", property_address)
+    merged = merged.replace("{{agent_name}}", agent_name or "Brian Elmore")
+    paragraphs = [p.strip() for p in re.split(r"\n\s*\n", merged) if p.strip()]
+
+    letter = {
+        "date": datetime.date.today().strftime("%B %-d, %Y"),
+        "recipient_name": greeting_name if used_fallback else owner_name or greeting_name,
+        "address_line1": address_line1,
+        "address_line2": address_line2,
+        "greeting": greeting_name,
+        "paragraphs": paragraphs,
+    }
+    return letter, used_fallback
+
+
 PAGE = """
 <!DOCTYPE html>
 <html>
@@ -183,10 +309,15 @@ PAGE = """
   .section-divider { font-size: .78rem; font-weight: 700; color: var(--blue); text-transform: uppercase; letter-spacing: .03em; margin: 18px 0 10px; padding-top: 14px; border-top: 1px solid var(--border); }
   .section-divider:first-child { margin-top: 0; padding-top: 0; border-top: none; }
   .build-credit { text-align: center; margin-top: 32px; padding-top: 20px; border-top: 1px solid var(--border); font-size: .74rem; color: var(--muted); }
+  .mode-tabs { max-width: 760px; margin: 0 auto; padding: 18px 24px 0; display: flex; gap: 8px; }
+  .mode-tab { flex: 1; text-align: center; padding: 10px 14px; border-radius: var(--r); background: #fff; border: 1.5px solid var(--border-b); color: var(--blue); font-size: .82rem; font-weight: 700; text-decoration: none; transition: background var(--d) var(--ease), color var(--d) var(--ease); }
+  .mode-tab:hover { background: var(--slate); }
+  .mode-tab.active { background: var(--blue); color: #fff; border-color: var(--blue); }
   @media (max-width: 640px) {
     .top-in { padding: 0 16px; gap: 12px; } .top-in img { height: 36px; } .top-title { font-size: .7rem; padding-left: 12px; }
     .wrap { padding: 24px 16px 64px; } .hero h1 { font-size: 1.4rem; } .card { padding: 18px; border-radius: var(--r); }
     .row { flex-direction: column; gap: 14px; } button.primary { width: 100%; justify-content: center; }
+    .mode-tabs { padding: 14px 16px 0; } .mode-tab { font-size: .74rem; padding: 9px 6px; }
   }
 </style>
 </head>
@@ -199,11 +330,16 @@ PAGE = """
   </div>
 </header>
 
+<div class="mode-tabs">
+  <a href="/" class="mode-tab active">Single Report</a>
+  <a href="/batch" class="mode-tab">Batch Mode</a>
+  <a href="/mailer" class="mode-tab">Mailer Mode</a>
+</div>
+
 <div class="wrap">
   <div class="hero">
     <h1>PEAR Report Generator</h1>
     <p>Upload a Remine public-records report for a client's property, review and customize every figure, then generate a branded 1-page Professional Equity Assessment Report.</p>
-    <p style="margin-top:10px;"><a href="/batch" style="color:var(--blue);font-weight:700;font-size:.88rem;">Generating several reports at once? Try batch mode &rarr;</a></p>
   </div>
 
   <div class="card">
@@ -622,10 +758,15 @@ BATCH_PAGE = """
   .file-row .name { overflow-wrap:anywhere; }
   .file-row button { background:none; border:none; color:var(--red); cursor:pointer; font-size:.8rem; font-weight:700; padding:2px 6px; flex-shrink:0; }
   .build-credit { text-align: center; margin-top: 32px; padding-top: 20px; border-top: 1px solid var(--border); font-size: .74rem; color: var(--muted); }
+  .mode-tabs { max-width: 760px; margin: 0 auto; padding: 18px 24px 0; display: flex; gap: 8px; }
+  .mode-tab { flex: 1; text-align: center; padding: 10px 14px; border-radius: var(--r); background: #fff; border: 1.5px solid var(--border-b); color: var(--blue); font-size: .82rem; font-weight: 700; text-decoration: none; transition: background var(--d) var(--ease), color var(--d) var(--ease); }
+  .mode-tab:hover { background: var(--slate); }
+  .mode-tab.active { background: var(--blue); color: #fff; border-color: var(--blue); }
   @media (max-width: 640px) {
     .top-in { padding: 0 16px; gap: 12px; } .top-in img { height: 36px; } .top-title { font-size: .7rem; padding-left: 12px; }
     .wrap { padding: 24px 16px 64px; } .hero h1 { font-size: 1.4rem; } .card { padding: 18px; border-radius: var(--r); }
     .row { flex-direction: column; gap: 14px; } button.primary { width: 100%; justify-content: center; }
+    .mode-tabs { padding: 14px 16px 0; } .mode-tab { font-size: .74rem; padding: 9px 6px; }
   }
 </style>
 </head>
@@ -638,11 +779,16 @@ BATCH_PAGE = """
   </div>
 </header>
 
+<div class="mode-tabs">
+  <a href="/" class="mode-tab">Single Report</a>
+  <a href="/batch" class="mode-tab active">Batch Mode</a>
+  <a href="/mailer" class="mode-tab">Mailer Mode</a>
+</div>
+
 <div class="wrap">
   <div class="hero">
     <h1>PEAR Report Generator: Batch Mode</h1>
     <p>Drag and drop several Remine reports at once to generate a PDF for each, using the same defaults a single upload would auto-fill (no per-file review). If one property needs a correction, regenerate just that one through the normal single-report flow.</p>
-    <p><a href="/">&larr; Back to single-report mode</a></p>
   </div>
 
   <div class="card">
@@ -820,6 +966,325 @@ generateBtn.addEventListener('click', () => {
 """
 
 
+# Mailer mode: batch mode's multi-file pipeline, plus a mail-merged cover
+# letter prepended as page 1 of every generated PDF. The letter body is
+# edited ONCE here (shared across the whole batch, since there's still no
+# per-file review step) and persisted per-device via localStorage -- same
+# pattern as the agent name/phone/email settings -- so once someone
+# tweaks the wording on their own machine, it stays that way on future
+# visits until they change it again, without touching anyone else's copy.
+MAILER_PAGE = """
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>JLG PEAR Report Generator &ndash; Mailer Mode</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --blue: #032b42; --blue-dk: #021e30; --blue-md: #04395a;
+    --slate: #f2f2f2; --red: #780000; --red-hv: #8f0000; --white: #ffffff;
+    --text: #1a1a1a; --muted: #6b6b6b; --border: rgba(0,0,0,.08); --border-b: rgba(3,43,66,.12);
+    --r: 4px; --rl: 8px; --d: .28s; --ease: cubic-bezier(.4,0,.2,1);
+    --sh: 0 4px 20px rgba(0,0,0,.08); --sh-l: 0 12px 40px rgba(0,0,0,.14);
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family: 'Plus Jakarta Sans', sans-serif; background: var(--slate); color: var(--text); }
+  h1, h2 { font-family: 'DM Serif Display', serif; font-weight: 400; margin: 0; }
+  header.top { background: var(--blue); padding: 22px 0; }
+  .top-in { max-width: 760px; margin: 0 auto; padding: 0 24px; display: flex; align-items: center; gap: 18px; }
+  .top-in img { height: 44px; width: auto; display: block; }
+  .top-title { color: rgba(255,255,255,.55); font-size: .82rem; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; border-left: 1px solid rgba(255,255,255,.25); padding-left: 18px; }
+  .wrap { max-width: 760px; margin: 0 auto; padding: 40px 24px 100px; }
+  .hero { margin-bottom: 32px; }
+  .hero h1 { font-size: 1.7rem; color: var(--blue); }
+  .hero p { color: var(--muted); margin-top: 8px; font-size: .95rem; max-width: 560px; }
+  .card { background: #fff; border-radius: var(--rl); box-shadow: var(--sh); padding: 28px; margin-bottom: 24px; }
+  .step-num { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; border-radius: 50%; background: var(--red); color: #fff; font-size: .78rem; font-weight: 700; margin-right: 10px; flex-shrink: 0; }
+  .card h2 { font-size: 1.15rem; color: var(--blue); font-family: 'Plus Jakarta Sans'; font-weight: 700; display: flex; align-items: center; margin-bottom: 16px; }
+  #dropzone { border: 2px dashed var(--border-b); border-radius: var(--rl); padding: 32px 20px; text-align:center; color: var(--blue); cursor:pointer; transition: border-color var(--d) var(--ease), background var(--d) var(--ease); }
+  #dropzone:hover, #dropzone.drag { border-color: var(--blue); background: var(--slate); }
+  #dropzone p { margin: 6px 0; font-size: .92rem; }
+  #dropzone .hint { font-size:.8rem; color:var(--muted); }
+  input[type=file] { display:none; }
+  .row { display:flex; gap:16px; flex-wrap:wrap; }
+  .field { flex: 1; min-width: 200px; }
+  .field label { font-size:.78rem; font-weight: 700; color: var(--blue); text-transform: uppercase; letter-spacing: .03em; display:block; margin-bottom:6px; }
+  .field .helper { font-size: .74rem; color: var(--muted); margin-top: 4px; }
+  input[type=text] { padding:11px 13px; border:1.5px solid var(--border-b); border-radius: var(--r); font-size:.92rem; font-family: inherit; width:100%; }
+  input[type=text]:focus { outline: none; border-color: var(--blue); }
+  input[type=checkbox] { accent-color: var(--red); }
+  textarea { padding:13px 14px; border:1.5px solid var(--border-b); border-radius: var(--r); font-size:.9rem; font-family: inherit; width:100%; line-height:1.55; resize: vertical; }
+  textarea:focus { outline: none; border-color: var(--blue); }
+  button.primary { display: inline-flex; align-items: center; gap: 10px; background: var(--red); color: #fff; border: none; padding: 13px 24px; border-radius: var(--r); font-family: inherit; font-size:.88rem; font-weight: 700; letter-spacing: .01em; cursor:pointer; margin-top:14px; transition: background var(--d) var(--ease); }
+  button.primary:hover { background: var(--red-hv); }
+  button.primary:disabled { background:#c9c9c9; cursor:not-allowed; }
+  button.secondary { display:inline-flex; align-items:center; gap:8px; background:#fff; color:var(--blue); border:1.5px solid var(--border-b); padding:9px 16px; border-radius:var(--r); font-family:inherit; font-size:.8rem; font-weight:700; cursor:pointer; }
+  #status { font-size:.85rem; color:var(--muted); margin-top:10px; }
+  #saveStatus { font-size:.74rem; color:var(--muted); margin-top:8px; }
+  .file-row { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:9px 12px; border:1px solid var(--border); border-radius:var(--r); margin-bottom:8px; font-size:.85rem; }
+  .file-row .name { overflow-wrap:anywhere; }
+  .file-row button { background:none; border:none; color:var(--red); cursor:pointer; font-size:.8rem; font-weight:700; padding:2px 6px; flex-shrink:0; }
+  .merge-tags { background: var(--slate); border-radius: var(--r); padding: 10px 12px; font-size: .78rem; color: var(--text); margin-bottom: 12px; }
+  .merge-tags code { background:#fff; border:1px solid var(--border); border-radius:3px; padding:1px 5px; font-size:.76rem; color:var(--blue); }
+  .build-credit { text-align: center; margin-top: 32px; padding-top: 20px; border-top: 1px solid var(--border); font-size: .74rem; color: var(--muted); }
+  .mode-tabs { max-width: 760px; margin: 0 auto; padding: 18px 24px 0; display: flex; gap: 8px; }
+  .mode-tab { flex: 1; text-align: center; padding: 10px 14px; border-radius: var(--r); background: #fff; border: 1.5px solid var(--border-b); color: var(--blue); font-size: .82rem; font-weight: 700; text-decoration: none; transition: background var(--d) var(--ease), color var(--d) var(--ease); }
+  .mode-tab:hover { background: var(--slate); }
+  .mode-tab.active { background: var(--blue); color: #fff; border-color: var(--blue); }
+  @media (max-width: 640px) {
+    .top-in { padding: 0 16px; gap: 12px; } .top-in img { height: 36px; } .top-title { font-size: .7rem; padding-left: 12px; }
+    .wrap { padding: 24px 16px 64px; } .hero h1 { font-size: 1.4rem; } .card { padding: 18px; border-radius: var(--r); }
+    .row { flex-direction: column; gap: 14px; } button.primary { width: 100%; justify-content: center; }
+    .mode-tabs { padding: 14px 16px 0; } .mode-tab { font-size: .74rem; padding: 9px 6px; }
+  }
+</style>
+</head>
+<body>
+
+<header class="top">
+  <div class="top-in">
+    <img src="/static/logo/JLG-COMBO-BLUE.png" alt="Justin Lucas Group">
+    <span class="top-title">Internal Tool</span>
+  </div>
+</header>
+
+<div class="mode-tabs">
+  <a href="/" class="mode-tab">Single Report</a>
+  <a href="/batch" class="mode-tab">Batch Mode</a>
+  <a href="/mailer" class="mode-tab active">Mailer Mode</a>
+</div>
+
+<div class="wrap">
+  <div class="hero">
+    <h1>PEAR Report Generator: Mailer Mode</h1>
+    <p>Batch mode, plus a mail-merged cover letter prepended to every property's PDF -- ready to print and mail as a single piece. The letter is edited once below and applied to every property in this batch.</p>
+  </div>
+
+  <div class="card">
+    <h2><span class="step-num">1</span>Agent details</h2>
+    <div class="row">
+      <div class="field">
+        <label>Agent name</label>
+        <input type="text" id="agentName" value="{{ cfg.agent_name }}" placeholder="Brian Elmore">
+      </div>
+      <div class="field">
+        <label>Agent phone</label>
+        <input type="text" id="agentPhone" value="{{ cfg.agent_phone }}" placeholder="312.555.0100">
+      </div>
+      <div class="field">
+        <label>Agent email</label>
+        <input type="text" id="agentEmail" value="{{ cfg.agent_email }}">
+      </div>
+    </div>
+    <label style="display:flex;align-items:center;gap:7px;margin-top:16px;font-size:.82rem;color:var(--text);cursor:pointer;">
+      <input type="checkbox" id="printSafeLogo" {{ 'checked' if cfg.print_safe_logo else '' }} style="margin:0;">
+      Print-safe logo (black &amp; white)
+    </label>
+  </div>
+
+  <div class="card">
+    <h2><span class="step-num">2</span>Cover letter</h2>
+    <div class="merge-tags">
+      This becomes page 1 of every generated PDF, right before the PEAR report. The greeting and mailing address are filled in automatically for each property -- if a parsed owner name looks unreliable (reversed, missing, or an LLC/trust on title), it safely falls back to <code>Dear Homeowner,</code> instead of printing something that looks wrong. Use these merge tags anywhere in the body below:
+      <div style="margin-top:6px;"><code>{{ '{{owner_name}}' }}</code> &nbsp; <code>{{ '{{property_address}}' }}</code> &nbsp; <code>{{ '{{agent_name}}' }}</code></div>
+    </div>
+    <textarea id="letterBody" rows="10"></textarea>
+    <div id="saveStatus"></div>
+    <button class="secondary" id="resetLetterBtn" style="margin-top:10px;">Reset to default wording</button>
+    <textarea id="defaultLetterBody" style="display:none;">{{ default_letter }}</textarea>
+  </div>
+
+  <div class="card">
+    <h2><span class="step-num">3</span>Upload Remine reports</h2>
+    <div class="field helper" style="margin-bottom:14px;">
+      Each report auto-fills the same way batch mode does: value defaults to the average of the 3 AVMs, mortgage balance and owner name come straight from the parsed record, and the move-up target price defaults to ~25% above value. None of that is editable per file here -- only the cover letter above, which applies to the whole batch.
+    </div>
+    <div id="dropzone">
+      <p><strong>Drag &amp; drop multiple Remine PDFs here</strong></p>
+      <p class="hint">or click to browse and select several at once</p>
+      <input type="file" id="fileInput" accept="application/pdf" multiple>
+    </div>
+    <div id="fileList" style="margin-top:14px;"></div>
+    <div id="status"></div>
+    <button class="primary" id="generateBtn" disabled>Generate all mailers</button>
+  </div>
+
+  <p class="build-credit">&copy; 2026 Brian Elmore. All rights reserved. This tool may not be reproduced or redistributed without permission.</p>
+</div>
+
+<script>
+const AGENT_STORAGE_KEY = 'pear_agent_settings_v1';
+const LETTER_STORAGE_KEY = 'pear_mailer_letter_v1';
+
+function loadAgentSettings() {
+  try {
+    const raw = localStorage.getItem(AGENT_STORAGE_KEY);
+    if (!raw) return;
+    const saved = JSON.parse(raw);
+    if (saved.agent_name != null) document.getElementById('agentName').value = saved.agent_name;
+    if (saved.agent_phone != null) document.getElementById('agentPhone').value = saved.agent_phone;
+    if (saved.agent_email != null) document.getElementById('agentEmail').value = saved.agent_email;
+    if (saved.print_safe_logo != null) document.getElementById('printSafeLogo').checked = !!saved.print_safe_logo;
+  } catch (e) { /* localStorage unavailable -- fall back to server defaults silently */ }
+}
+
+function saveAgentSettings() {
+  try {
+    localStorage.setItem(AGENT_STORAGE_KEY, JSON.stringify({
+      agent_name: document.getElementById('agentName').value,
+      agent_phone: document.getElementById('agentPhone').value,
+      agent_email: document.getElementById('agentEmail').value,
+      print_safe_logo: document.getElementById('printSafeLogo').checked,
+    }));
+  } catch (e) { /* ignore */ }
+}
+
+loadAgentSettings();
+['agentName', 'agentPhone', 'agentEmail', 'printSafeLogo'].forEach(id => {
+  document.getElementById(id).addEventListener('change', saveAgentSettings);
+});
+
+// The cover letter wording is edited once and reused for every property
+// in a batch -- persisted per-device via localStorage (same pattern as
+// agent settings above), so once someone tweaks it on their own machine
+// it stays that way on future visits until they change it again, rather
+// than resetting to the generic default every time they open this page.
+const letterEl = document.getElementById('letterBody');
+const defaultLetter = document.getElementById('defaultLetterBody').value;
+const saveStatusEl = document.getElementById('saveStatus');
+
+function loadLetter() {
+  try {
+    const saved = localStorage.getItem(LETTER_STORAGE_KEY);
+    letterEl.value = (saved != null && saved.trim() !== '') ? saved : defaultLetter;
+  } catch (e) {
+    letterEl.value = defaultLetter;
+  }
+}
+
+function saveLetter() {
+  try {
+    localStorage.setItem(LETTER_STORAGE_KEY, letterEl.value);
+    saveStatusEl.textContent = 'Saved on this device -- will be used automatically next time.';
+  } catch (e) { /* ignore -- worst case it just doesn't persist this time */ }
+}
+
+loadLetter();
+letterEl.addEventListener('input', saveLetter);
+
+document.getElementById('resetLetterBtn').addEventListener('click', () => {
+  letterEl.value = defaultLetter;
+  saveLetter();
+});
+
+const dz = document.getElementById('dropzone');
+const fileInput = document.getElementById('fileInput');
+const fileListEl = document.getElementById('fileList');
+const statusEl = document.getElementById('status');
+const generateBtn = document.getElementById('generateBtn');
+
+let selectedFiles = [];
+
+function fileKey(f) { return f.name + '::' + f.size; }
+
+function addFiles(fileArray) {
+  for (const f of fileArray) {
+    if (f.type !== 'application/pdf' && !f.name.toLowerCase().endsWith('.pdf')) continue;
+    if (selectedFiles.some(existing => fileKey(existing) === fileKey(f))) continue;
+    selectedFiles.push(f);
+  }
+  renderFileList();
+}
+
+function removeFile(key) {
+  selectedFiles = selectedFiles.filter(f => fileKey(f) !== key);
+  renderFileList();
+}
+
+function renderFileList() {
+  fileListEl.innerHTML = '';
+  selectedFiles.forEach(f => {
+    const row = document.createElement('div');
+    row.className = 'file-row';
+    const key = fileKey(f);
+    row.innerHTML = '<span class="name">' + f.name + '</span>';
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.textContent = 'Remove';
+    btn.addEventListener('click', () => removeFile(key));
+    row.appendChild(btn);
+    fileListEl.appendChild(row);
+  });
+  generateBtn.disabled = selectedFiles.length === 0;
+  statusEl.textContent = selectedFiles.length ? selectedFiles.length + ' file(s) ready.' : '';
+}
+
+dz.addEventListener('click', () => fileInput.click());
+dz.addEventListener('dragover', e => { e.preventDefault(); dz.classList.add('drag'); });
+dz.addEventListener('dragleave', () => dz.classList.remove('drag'));
+dz.addEventListener('drop', e => {
+  e.preventDefault(); dz.classList.remove('drag');
+  if (e.dataTransfer.files.length) addFiles(Array.from(e.dataTransfer.files));
+});
+fileInput.addEventListener('change', () => {
+  if (fileInput.files.length) addFiles(Array.from(fileInput.files));
+  fileInput.value = '';
+});
+
+generateBtn.addEventListener('click', () => {
+  saveAgentSettings();
+  saveLetter();
+  if (!selectedFiles.length) return;
+
+  const form = new FormData();
+  form.append('agent_name', document.getElementById('agentName').value);
+  form.append('agent_phone', document.getElementById('agentPhone').value);
+  form.append('agent_email', document.getElementById('agentEmail').value);
+  form.append('print_safe_logo', document.getElementById('printSafeLogo').checked ? '1' : '');
+  form.append('letter_body', letterEl.value);
+  selectedFiles.forEach(f => form.append('files', f));
+
+  generateBtn.disabled = true;
+  generateBtn.textContent = 'Generating ' + selectedFiles.length + ' mailer(s)...';
+  statusEl.textContent = 'This can take a little while for a large batch -- please leave this tab open.';
+
+  fetch('/generate_mailer', { method: 'POST', body: form })
+    .then(r => {
+      if (!r.ok) return r.json().then(e => { throw new Error(e.error || 'Failed'); });
+      const cd = r.headers.get('Content-Disposition') || '';
+      const match = cd.match(/filename="?([^";]+)"?/);
+      const filename = match ? match[1] : 'PEAR_Mailers_Batch.zip';
+      return r.blob().then(blob => ({ blob, filename }));
+    })
+    .then(({ blob, filename }) => {
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      statusEl.textContent = 'Done -- check the zip\\'s _batch_summary.txt for any fallback greetings, warnings, or files that failed to parse.';
+      generateBtn.disabled = false;
+      generateBtn.textContent = 'Generate all mailers';
+    })
+    .catch(err => {
+      alert('Error: ' + err.message);
+      statusEl.textContent = '';
+      generateBtn.disabled = false;
+      generateBtn.textContent = 'Generate all mailers';
+    });
+});
+</script>
+</body>
+</html>
+"""
+
+
 @app.route("/")
 def index():
     return render_template_string(PAGE, cfg=DEFAULT_AGENT)
@@ -828,6 +1293,11 @@ def index():
 @app.route("/batch")
 def batch_page():
     return render_template_string(BATCH_PAGE, cfg=DEFAULT_AGENT)
+
+
+@app.route("/mailer")
+def mailer_page():
+    return render_template_string(MAILER_PAGE, cfg=DEFAULT_AGENT, default_letter=DEFAULT_LETTER_BODY)
 
 
 @app.route("/parse", methods=["POST"])
@@ -1021,6 +1491,114 @@ def generate_batch():
         zip_buf,
         as_attachment=True,
         download_name="PEAR_Reports_Batch.zip",
+        mimetype="application/zip",
+    )
+
+
+@app.route("/generate_mailer", methods=["POST"])
+def generate_mailer():
+    files = request.files.getlist("files")
+    if not files:
+        return jsonify({"error": "No files uploaded"}), 400
+
+    agent_name = request.form.get("agent_name", "").strip() or "Brian Elmore"
+    agent_phone = request.form.get("agent_phone", "").strip()
+    agent_email = request.form.get("agent_email", "").strip() or "brian@justinlucasgroup.com"
+    print_safe_logo = bool(request.form.get("print_safe_logo", "").strip())
+    letter_template = request.form.get("letter_body", "").strip() or DEFAULT_LETTER_BODY
+
+    # Same no-review, one-try/except-per-file pipeline as plain batch
+    # mode, plus a mail-merged cover letter (page 1) ahead of the report
+    # in the SAME pdf. The summary additionally flags which properties
+    # got the generic "Dear Homeowner" fallback greeting, since that's
+    # the one thing about a mailed piece worth a human glancing at before
+    # it goes out -- everything else follows the same "fix it via the
+    # normal single-report flow if it looks off" pattern as batch mode.
+    results = []
+    zip_buf = io.BytesIO()
+    with zipfile.ZipFile(zip_buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        used_names = set()
+        for f in files:
+            original_name = f.filename or "report.pdf"
+            try:
+                data = detect_and_parse(f.read(), original_name)
+                fields, computed = _default_fields_from_parsed(data)
+                letter, used_fallback_greeting = _build_letter(data, fields, letter_template, agent_name)
+
+                out_name = f"PEAR_{uuid.uuid4().hex[:8]}.pdf"
+                out_path = os.path.join(OUTPUT_DIR, out_name)
+                render_pear(
+                    fields, computed, out_path,
+                    agent_name=agent_name, agent_phone=agent_phone, agent_email=agent_email,
+                    print_safe_logo=print_safe_logo, letter=letter,
+                )
+
+                safe_address = _safe_filename_part(fields["full_address"], "Property")
+                safe_client = _safe_filename_part(fields["client_name"], "Client")
+                pdf_name = f"PEAR_Mailer_{safe_address}_{safe_client}.pdf"
+                base_name = pdf_name[:-4]
+                n = 2
+                while pdf_name in used_names:
+                    pdf_name = f"{base_name}_{n}.pdf"
+                    n += 1
+                used_names.add(pdf_name)
+
+                with open(out_path, "rb") as pf:
+                    zf.writestr(pdf_name, pf.read())
+                try:
+                    os.remove(out_path)
+                except OSError:
+                    pass
+
+                warnings = list(data.get("parse_warnings") or [])
+                if used_fallback_greeting:
+                    warnings.append(
+                        f"Owner name on record ('{data.get('owner_names_display') or 'blank'}') "
+                        "didn't look reliable enough to print in the greeting/address, so this "
+                        "letter uses 'Dear Homeowner,' instead."
+                    )
+
+                results.append({
+                    "source_file": original_name,
+                    "output_file": pdf_name,
+                    "status": "Generated",
+                    "warnings": warnings,
+                })
+            except Exception as e:
+                traceback.print_exc()
+                results.append({
+                    "source_file": original_name,
+                    "output_file": None,
+                    "status": f"FAILED to generate: {e}",
+                    "warnings": [],
+                })
+
+        summary_lines = [
+            "PEAR Mailer Batch -- Summary",
+            f"{len(results)} file(s) processed, {sum(1 for r in results if r['output_file'])} PDF(s) generated.",
+            "",
+            "Each PDF has the cover letter as page 1 and the PEAR report as page 2+.",
+            "Every report used default values (average of the 3 AVMs, parsed mortgage",
+            "balance, ~25%-above-value target price) with no per-file review -- same as",
+            "batch mode. If a property below shows a warning (including a fallback",
+            "'Dear Homeowner' greeting), it's worth a quick look before mailing; if the",
+            "whole thing looks off, regenerate that one through the normal single-report",
+            "flow so you can review/correct it first.",
+            "",
+        ]
+        for r in results:
+            summary_lines.append(f"- {r['source_file']}  ->  {r['output_file'] or '(not generated)'}")
+            summary_lines.append(f"    Status: {r['status']}")
+            for w in r["warnings"]:
+                summary_lines.append(f"    Heads up: {w}")
+            summary_lines.append("")
+        zf.writestr("_batch_summary.txt", "\n".join(summary_lines))
+
+    zip_buf.seek(0)
+    return send_file(
+        zip_buf,
+        as_attachment=True,
+        download_name="PEAR_Mailers_Batch.zip",
         mimetype="application/zip",
     )
 

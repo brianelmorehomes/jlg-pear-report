@@ -47,11 +47,17 @@ def pct(n):
         return "—"
 
 
-def render_pear(fields, computed, output_path, agent_name="Brian Elmore", agent_phone="", agent_email="brian@justinlucasgroup.com", print_safe_logo=False):
+def render_pear(fields, computed, output_path, agent_name="Brian Elmore", agent_phone="", agent_email="brian@justinlucasgroup.com", print_safe_logo=False, letter=None):
     """
     fields: dict of the reviewed/edited raw inputs (client name, address,
         value, loan balance, last purchase price/date, target price, etc.)
     computed: dict returned by calc.compute_pear() for that same field set
+    letter: optional dict for Mailer mode -- when present, a cover-letter
+        page is prepended (page 1) ahead of the PEAR report itself, in the
+        SAME document/PDF. Expected keys: date, recipient_name,
+        address_line1, address_line2, greeting, paragraphs (list of str).
+        None (the default) skips the letter entirely, so single-report and
+        plain batch-mode PDFs are unaffected.
     """
     env = Environment(loader=FileSystemLoader(os.path.join(BASE_DIR, "templates")))
     env.filters["money"] = money
@@ -62,6 +68,7 @@ def render_pear(fields, computed, output_path, agent_name="Brian Elmore", agent_
     html_str = template.render(
         f=fields,
         c=computed,
+        letter=letter,
         font_dir=FONT_DIR,
         logo_jlg=JLG_BLOCK,
         logo_brokerage=BROKERAGE_LOCKUP_BW if print_safe_logo else BROKERAGE_LOCKUP,
