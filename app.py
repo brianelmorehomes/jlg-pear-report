@@ -9,10 +9,12 @@ Assessment Report, review/edit every field, then generate a branded,
 Run with:  python3 app.py
 Then open: http://localhost:5000
 """
+import io
 import os
 import re
 import traceback
 import uuid
+import zipfile
 
 from flask import Flask, request, jsonify, send_file, render_template_string
 
@@ -60,6 +62,68 @@ def _num(v):
         return float(s)
     except ValueError:
         return None
+
+
+def _safe_filename_part(s, fallback):
+    return re.sub(r"[^A-Za-z0-9]+", "_", s or fallback).strip("_")
+
+
+def _default_fields_from_parsed(data):
+    """Batch mode has no human review step -- there's nobody to look at the
+    review form and confirm/edit each value before a PDF gets generated.
+    So this mirrors, in Python, exactly what populateReview()/smartSet() do
+    in the browser for a single upload: same value (avg of the 3 AVMs,
+    falling back to Remine's own headline figure), same loan balance, same
+    owner-name-as-client-name default, same ~25%-above-value target price.
+    A batch-generated report is exactly what a single-report upload would
+    produce if the agent hit Generate without touching anything -- which is
+    the whole point (Brian's own words: he can always redo any one
+    property individually through the normal flow if something looks off)."""
+    value = data.get("value_est_avg") or data.get("value_est")
+    loan_balance = data.get("loan_balance_est")
+    last_purchase_price = data.get("last_sale_price")
+
+    last_purchase_year = ""
+    last_sale_date = data.get("last_sale_date")
+    if last_sale_date:
+        parts = last_sale_date.split("/")
+        if len(parts) == 3:
+            try:
+                yy = int(parts[2])
+                last_purchase_year = str(2000 + yy if yy < 50 else 1900 + yy)
+            except ValueError:
+                pass
+
+    target_price = data.get("suggested_target_price") or suggested_target_price(value)
+
+    avms = []
+    valuations = data.get("valuations") or {}
+    for label, key in (("First American", "first_american"), ("Zillow", "zillow"), ("Remine", "remine")):
+        v = valuations.get(key) or {}
+        if v.get("est") is not None:
+            avms.append({"label": label, "est": v.get("est"), "low": v.get("low"), "high": v.get("high")})
+
+    fields = {
+        "client_name": data.get("owner_names_display") or "",
+        "full_address": data.get("full_address") or "",
+        "beds": data.get("beds"),
+        "baths": data.get("baths"),
+        "sqft": data.get("sqft"),
+        "year_built": data.get("year_built"),
+        "property_type": data.get("property_type") or "",
+        "value": value,
+        "loan_balance": loan_balance,
+        "last_purchase_price": last_purchase_price,
+        "last_purchase_year": last_purchase_year,
+        "avms": avms,
+    }
+    computed = compute_pear(
+        value=value,
+        loan_balance=loan_balance,
+        last_purchase_price=last_purchase_price,
+        target_price=target_price,
+    )
+    return fields, computed
 
 
 PAGE = """
@@ -139,6 +203,7 @@ PAGE = """
   <div class="hero">
     <h1>PEAR Report Generator</h1>
     <p>Upload a Remine public-records report for a client's property, review and customize every figure, then generate a branded 1-page Professional Equity Assessment Report.</p>
+    <p style="margin-top:10px;"><a href="/batch" style="color:var(--blue);font-weight:700;font-size:.88rem;">Generating several reports at once? Try batch mode &rarr;</a></p>
   </div>
 
   <div class="card">
@@ -493,9 +558,276 @@ generateBtn.addEventListener('click', () => {
 """
 
 
+# Batch mode intentionally skips the whole review step -- there's no human
+# in the loop per file, so every report gets generated straight from
+# _default_fields_from_parsed() with no chance to fix a bad parse before
+# the PDF is made. That's a real tradeoff (see Brian's own framing when he
+# asked for this): it trades per-file accuracy for throughput, on the
+# assumption that any one report that looks wrong afterward gets
+# regenerated individually through the normal single-report flow, where it
+# CAN be reviewed and corrected. Reusing the same page chrome/CSS as PAGE
+# above (duplicated rather than shared, matching how the rest of this
+# codebase inlines everything per-tool) keeps it visually consistent.
+BATCH_PAGE = """
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>JLG PEAR Report Generator &ndash; Batch Mode</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --blue: #032b42; --blue-dk: #021e30; --blue-md: #04395a;
+    --slate: #f2f2f2; --red: #780000; --red-hv: #8f0000; --white: #ffffff;
+    --text: #1a1a1a; --muted: #6b6b6b; --border: rgba(0,0,0,.08); --border-b: rgba(3,43,66,.12);
+    --r: 4px; --rl: 8px; --d: .28s; --ease: cubic-bezier(.4,0,.2,1);
+    --sh: 0 4px 20px rgba(0,0,0,.08); --sh-l: 0 12px 40px rgba(0,0,0,.14);
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family: 'Plus Jakarta Sans', sans-serif; background: var(--slate); color: var(--text); }
+  h1, h2 { font-family: 'DM Serif Display', serif; font-weight: 400; margin: 0; }
+  header.top { background: var(--blue); padding: 22px 0; }
+  .top-in { max-width: 760px; margin: 0 auto; padding: 0 24px; display: flex; align-items: center; gap: 18px; }
+  .top-in img { height: 44px; width: auto; display: block; }
+  .top-title { color: rgba(255,255,255,.55); font-size: .82rem; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; border-left: 1px solid rgba(255,255,255,.25); padding-left: 18px; }
+  .wrap { max-width: 760px; margin: 0 auto; padding: 40px 24px 100px; }
+  .hero { margin-bottom: 32px; }
+  .hero h1 { font-size: 1.7rem; color: var(--blue); }
+  .hero p { color: var(--muted); margin-top: 8px; font-size: .95rem; max-width: 560px; }
+  .hero a { color: var(--blue); }
+  .card { background: #fff; border-radius: var(--rl); box-shadow: var(--sh); padding: 28px; margin-bottom: 24px; }
+  .step-num { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; border-radius: 50%; background: var(--red); color: #fff; font-size: .78rem; font-weight: 700; margin-right: 10px; flex-shrink: 0; }
+  .card h2 { font-size: 1.15rem; color: var(--blue); font-family: 'Plus Jakarta Sans'; font-weight: 700; display: flex; align-items: center; margin-bottom: 16px; }
+  #dropzone { border: 2px dashed var(--border-b); border-radius: var(--rl); padding: 32px 20px; text-align:center; color: var(--blue); cursor:pointer; transition: border-color var(--d) var(--ease), background var(--d) var(--ease); }
+  #dropzone:hover, #dropzone.drag { border-color: var(--blue); background: var(--slate); }
+  #dropzone p { margin: 6px 0; font-size: .92rem; }
+  #dropzone .hint { font-size:.8rem; color:var(--muted); }
+  input[type=file] { display:none; }
+  .row { display:flex; gap:16px; flex-wrap:wrap; }
+  .field { flex: 1; min-width: 200px; }
+  .field label { font-size:.78rem; font-weight: 700; color: var(--blue); text-transform: uppercase; letter-spacing: .03em; display:block; margin-bottom:6px; }
+  .field .helper { font-size: .74rem; color: var(--muted); margin-top: 4px; }
+  input[type=text] { padding:11px 13px; border:1.5px solid var(--border-b); border-radius: var(--r); font-size:.92rem; font-family: inherit; width:100%; }
+  input[type=text]:focus { outline: none; border-color: var(--blue); }
+  input[type=checkbox] { accent-color: var(--red); }
+  button.primary { display: inline-flex; align-items: center; gap: 10px; background: var(--red); color: #fff; border: none; padding: 13px 24px; border-radius: var(--r); font-family: inherit; font-size:.88rem; font-weight: 700; letter-spacing: .01em; cursor:pointer; margin-top:14px; transition: background var(--d) var(--ease); }
+  button.primary:hover { background: var(--red-hv); }
+  button.primary:disabled { background:#c9c9c9; cursor:not-allowed; }
+  button.secondary { display:inline-flex; align-items:center; gap:8px; background:#fff; color:var(--blue); border:1.5px solid var(--border-b); padding:9px 16px; border-radius:var(--r); font-family:inherit; font-size:.8rem; font-weight:700; cursor:pointer; }
+  #status { font-size:.85rem; color:var(--muted); margin-top:10px; }
+  .file-row { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:9px 12px; border:1px solid var(--border); border-radius:var(--r); margin-bottom:8px; font-size:.85rem; }
+  .file-row .name { overflow-wrap:anywhere; }
+  .file-row button { background:none; border:none; color:var(--red); cursor:pointer; font-size:.8rem; font-weight:700; padding:2px 6px; flex-shrink:0; }
+  .build-credit { text-align: center; margin-top: 32px; padding-top: 20px; border-top: 1px solid var(--border); font-size: .74rem; color: var(--muted); }
+  @media (max-width: 640px) {
+    .top-in { padding: 0 16px; gap: 12px; } .top-in img { height: 36px; } .top-title { font-size: .7rem; padding-left: 12px; }
+    .wrap { padding: 24px 16px 64px; } .hero h1 { font-size: 1.4rem; } .card { padding: 18px; border-radius: var(--r); }
+    .row { flex-direction: column; gap: 14px; } button.primary { width: 100%; justify-content: center; }
+  }
+</style>
+</head>
+<body>
+
+<header class="top">
+  <div class="top-in">
+    <img src="/static/logo/JLG-COMBO-BLUE.png" alt="Justin Lucas Group">
+    <span class="top-title">Internal Tool</span>
+  </div>
+</header>
+
+<div class="wrap">
+  <div class="hero">
+    <h1>PEAR Report Generator: Batch Mode</h1>
+    <p>Drag and drop several Remine reports at once to generate a PDF for each, using the same defaults a single upload would auto-fill (no per-file review). If one property needs a correction, regenerate just that one through the normal single-report flow.</p>
+    <p><a href="/">&larr; Back to single-report mode</a></p>
+  </div>
+
+  <div class="card">
+    <h2><span class="step-num">1</span>Agent details</h2>
+    <div class="row">
+      <div class="field">
+        <label>Agent name</label>
+        <input type="text" id="agentName" value="{{ cfg.agent_name }}" placeholder="Brian Elmore">
+      </div>
+      <div class="field">
+        <label>Agent phone</label>
+        <input type="text" id="agentPhone" value="{{ cfg.agent_phone }}" placeholder="312.555.0100">
+      </div>
+      <div class="field">
+        <label>Agent email</label>
+        <input type="text" id="agentEmail" value="{{ cfg.agent_email }}">
+      </div>
+    </div>
+    <label style="display:flex;align-items:center;gap:7px;margin-top:16px;font-size:.82rem;color:var(--text);cursor:pointer;">
+      <input type="checkbox" id="printSafeLogo" {{ 'checked' if cfg.print_safe_logo else '' }} style="margin:0;">
+      Print-safe logo (black &amp; white)
+    </label>
+  </div>
+
+  <div class="card">
+    <h2><span class="step-num">2</span>Upload Remine reports</h2>
+    <div class="field helper" style="margin-bottom:14px;">
+      Each report auto-fills the same way a single upload would: value defaults to the average of the 3 AVMs, mortgage balance and client name come straight from the parsed record, and the move-up target price defaults to ~25% above value. None of that is editable per file here.
+    </div>
+    <div id="dropzone">
+      <p><strong>Drag &amp; drop multiple Remine PDFs here</strong></p>
+      <p class="hint">or click to browse and select several at once</p>
+      <input type="file" id="fileInput" accept="application/pdf" multiple>
+    </div>
+    <div id="fileList" style="margin-top:14px;"></div>
+    <div id="status"></div>
+    <button class="primary" id="generateBtn" disabled>Generate all PDFs</button>
+  </div>
+
+  <p class="build-credit">&copy; 2026 Brian Elmore. All rights reserved. This tool may not be reproduced or redistributed without permission.</p>
+</div>
+
+<script>
+const AGENT_STORAGE_KEY = 'pear_agent_settings_v1';
+
+function loadAgentSettings() {
+  try {
+    const raw = localStorage.getItem(AGENT_STORAGE_KEY);
+    if (!raw) return;
+    const saved = JSON.parse(raw);
+    if (saved.agent_name != null) document.getElementById('agentName').value = saved.agent_name;
+    if (saved.agent_phone != null) document.getElementById('agentPhone').value = saved.agent_phone;
+    if (saved.agent_email != null) document.getElementById('agentEmail').value = saved.agent_email;
+    if (saved.print_safe_logo != null) document.getElementById('printSafeLogo').checked = !!saved.print_safe_logo;
+  } catch (e) { /* localStorage unavailable -- fall back to server defaults silently */ }
+}
+
+function saveAgentSettings() {
+  try {
+    localStorage.setItem(AGENT_STORAGE_KEY, JSON.stringify({
+      agent_name: document.getElementById('agentName').value,
+      agent_phone: document.getElementById('agentPhone').value,
+      agent_email: document.getElementById('agentEmail').value,
+      print_safe_logo: document.getElementById('printSafeLogo').checked,
+    }));
+  } catch (e) { /* ignore */ }
+}
+
+loadAgentSettings();
+['agentName', 'agentPhone', 'agentEmail', 'printSafeLogo'].forEach(id => {
+  document.getElementById(id).addEventListener('change', saveAgentSettings);
+});
+
+const dz = document.getElementById('dropzone');
+const fileInput = document.getElementById('fileInput');
+const fileListEl = document.getElementById('fileList');
+const statusEl = document.getElementById('status');
+const generateBtn = document.getElementById('generateBtn');
+
+// Keyed by name+size so dropping the same folder twice, or a drag then a
+// browse of overlapping files, doesn't silently duplicate an entry.
+let selectedFiles = [];
+
+function fileKey(f) { return f.name + '::' + f.size; }
+
+function addFiles(fileArray) {
+  for (const f of fileArray) {
+    if (f.type !== 'application/pdf' && !f.name.toLowerCase().endsWith('.pdf')) continue;
+    if (selectedFiles.some(existing => fileKey(existing) === fileKey(f))) continue;
+    selectedFiles.push(f);
+  }
+  renderFileList();
+}
+
+function removeFile(key) {
+  selectedFiles = selectedFiles.filter(f => fileKey(f) !== key);
+  renderFileList();
+}
+
+function renderFileList() {
+  fileListEl.innerHTML = '';
+  selectedFiles.forEach(f => {
+    const row = document.createElement('div');
+    row.className = 'file-row';
+    const key = fileKey(f);
+    row.innerHTML = '<span class="name">' + f.name + '</span>';
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.textContent = 'Remove';
+    btn.addEventListener('click', () => removeFile(key));
+    row.appendChild(btn);
+    fileListEl.appendChild(row);
+  });
+  generateBtn.disabled = selectedFiles.length === 0;
+  statusEl.textContent = selectedFiles.length ? selectedFiles.length + ' file(s) ready.' : '';
+}
+
+dz.addEventListener('click', () => fileInput.click());
+dz.addEventListener('dragover', e => { e.preventDefault(); dz.classList.add('drag'); });
+dz.addEventListener('dragleave', () => dz.classList.remove('drag'));
+dz.addEventListener('drop', e => {
+  e.preventDefault(); dz.classList.remove('drag');
+  if (e.dataTransfer.files.length) addFiles(Array.from(e.dataTransfer.files));
+});
+fileInput.addEventListener('change', () => {
+  if (fileInput.files.length) addFiles(Array.from(fileInput.files));
+  fileInput.value = '';
+});
+
+generateBtn.addEventListener('click', () => {
+  saveAgentSettings();
+  if (!selectedFiles.length) return;
+
+  const form = new FormData();
+  form.append('agent_name', document.getElementById('agentName').value);
+  form.append('agent_phone', document.getElementById('agentPhone').value);
+  form.append('agent_email', document.getElementById('agentEmail').value);
+  form.append('print_safe_logo', document.getElementById('printSafeLogo').checked ? '1' : '');
+  selectedFiles.forEach(f => form.append('files', f));
+
+  generateBtn.disabled = true;
+  generateBtn.textContent = 'Generating ' + selectedFiles.length + ' report(s)...';
+  statusEl.textContent = 'This can take a little while for a large batch -- please leave this tab open.';
+
+  fetch('/generate_batch', { method: 'POST', body: form })
+    .then(r => {
+      if (!r.ok) return r.json().then(e => { throw new Error(e.error || 'Failed'); });
+      const cd = r.headers.get('Content-Disposition') || '';
+      const match = cd.match(/filename="?([^";]+)"?/);
+      const filename = match ? match[1] : 'PEAR_Reports_Batch.zip';
+      return r.blob().then(blob => ({ blob, filename }));
+    })
+    .then(({ blob, filename }) => {
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      statusEl.textContent = 'Done -- check the zip\\'s _batch_summary.txt for any warnings or files that failed to parse.';
+      generateBtn.disabled = false;
+      generateBtn.textContent = 'Generate all PDFs';
+    })
+    .catch(err => {
+      alert('Error: ' + err.message);
+      statusEl.textContent = '';
+      generateBtn.disabled = false;
+      generateBtn.textContent = 'Generate all PDFs';
+    });
+});
+</script>
+</body>
+</html>
+"""
+
+
 @app.route("/")
 def index():
     return render_template_string(PAGE, cfg=DEFAULT_AGENT)
+
+
+@app.route("/batch")
+def batch_page():
+    return render_template_string(BATCH_PAGE, cfg=DEFAULT_AGENT)
 
 
 @app.route("/parse", methods=["POST"])
@@ -581,13 +913,116 @@ def generate():
         # client can have multiple properties and one address can get
         # multiple reports over time) plus the client name for clarity
         # when several files land in the same downloads folder.
-        safe_address = re.sub(r"[^A-Za-z0-9]+", "_", fields["full_address"] or "Property").strip("_")
-        safe_client = re.sub(r"[^A-Za-z0-9]+", "_", fields["client_name"] or "Client").strip("_")
+        safe_address = _safe_filename_part(fields["full_address"], "Property")
+        safe_client = _safe_filename_part(fields["client_name"], "Client")
         download_name = f"PEAR_Report_{safe_address}_{safe_client}.pdf"
         return send_file(out_path, as_attachment=True, download_name=download_name)
     except Exception as e:
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
+
+
+@app.route("/generate_batch", methods=["POST"])
+def generate_batch():
+    files = request.files.getlist("files")
+    if not files:
+        return jsonify({"error": "No files uploaded"}), 400
+
+    agent_name = request.form.get("agent_name", "").strip() or "Brian Elmore"
+    agent_phone = request.form.get("agent_phone", "").strip()
+    agent_email = request.form.get("agent_email", "").strip() or "brian@justinlucasgroup.com"
+    print_safe_logo = bool(request.form.get("print_safe_logo", "").strip())
+
+    # One PDF per uploaded file, all zipped together for a single
+    # download. A single bad file (unreadable PDF, wrong report type,
+    # totally unrecognizable format) shouldn't sink the other N-1 that
+    # parsed fine -- so each file gets its own try/except, and failures
+    # are recorded in the summary instead of aborting the batch.
+    results = []
+    zip_buf = io.BytesIO()
+    with zipfile.ZipFile(zip_buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        used_names = set()
+        for f in files:
+            original_name = f.filename or "report.pdf"
+            try:
+                data = detect_and_parse(f.read(), original_name)
+                fields, computed = _default_fields_from_parsed(data)
+
+                out_name = f"PEAR_{uuid.uuid4().hex[:8]}.pdf"
+                out_path = os.path.join(OUTPUT_DIR, out_name)
+                render_pear(
+                    fields, computed, out_path,
+                    agent_name=agent_name, agent_phone=agent_phone, agent_email=agent_email,
+                    print_safe_logo=print_safe_logo,
+                )
+
+                safe_address = _safe_filename_part(fields["full_address"], "Property")
+                safe_client = _safe_filename_part(fields["client_name"], "Client")
+                pdf_name = f"PEAR_Report_{safe_address}_{safe_client}.pdf"
+                # Two different source files can land on the same
+                # address/client combo (e.g. re-uploading a corrected
+                # report) -- de-dupe inside the zip rather than silently
+                # overwrite one with the other.
+                base_name = pdf_name[:-4]
+                n = 2
+                while pdf_name in used_names:
+                    pdf_name = f"{base_name}_{n}.pdf"
+                    n += 1
+                used_names.add(pdf_name)
+
+                with open(out_path, "rb") as pf:
+                    zf.writestr(pdf_name, pf.read())
+                try:
+                    os.remove(out_path)
+                except OSError:
+                    # Best-effort cleanup of the scratch temp file only --
+                    # the report is already safely written into the zip
+                    # above, so a failure here (locked file, odd
+                    # filesystem/permissions) must never be treated as a
+                    # failed generation.
+                    pass
+
+                results.append({
+                    "source_file": original_name,
+                    "output_file": pdf_name,
+                    "status": "Generated",
+                    "warnings": data.get("parse_warnings") or [],
+                })
+            except Exception as e:
+                traceback.print_exc()
+                results.append({
+                    "source_file": original_name,
+                    "output_file": None,
+                    "status": f"FAILED to generate: {e}",
+                    "warnings": [],
+                })
+
+        summary_lines = [
+            "PEAR Report Batch -- Summary",
+            f"{len(results)} file(s) processed, {sum(1 for r in results if r['output_file'])} PDF(s) generated.",
+            "",
+            "Every report here used default values (average of the 3 AVMs, parsed",
+            "mortgage balance, public-record owner name, ~25%-above-value target",
+            "price) with no per-file review. If a property below shows a warning,",
+            "or looks off once you open the PDF, regenerate just that one through",
+            "the normal single-report flow so you can review/correct it first.",
+            "",
+        ]
+        for r in results:
+            summary_lines.append(f"- {r['source_file']}  ->  {r['output_file'] or '(not generated)'}")
+            summary_lines.append(f"    Status: {r['status']}")
+            for w in r["warnings"]:
+                summary_lines.append(f"    Heads up: {w}")
+            summary_lines.append("")
+        zf.writestr("_batch_summary.txt", "\n".join(summary_lines))
+
+    zip_buf.seek(0)
+    return send_file(
+        zip_buf,
+        as_attachment=True,
+        download_name="PEAR_Reports_Batch.zip",
+        mimetype="application/zip",
+    )
 
 
 if __name__ == "__main__":
