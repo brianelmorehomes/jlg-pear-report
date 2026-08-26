@@ -130,38 +130,68 @@ def parse_remine_pdf(file_bytes):
         data["parse_warnings"].append("Could not find the status/address header line on any page.")
 
     # ---- Stat line: beds/baths/sqft/acres/value/equity/type ----
-    # The middle-dot/pipe dividers between segments ("4 Beds · 2 Baths ·
-    # ... | $774,000 Est Value ...") aren't always present -- one real
-    # report came through with the "|" before Est Value simply missing
-    # (just whitespace in its place), which broke an earlier version of
-    # this regex that required exactly one non-whitespace divider
-    # character at every junction. Each `\S?` below is now optional
-    # (0 or 1 divider char) instead of mandatory, so a report that drops
-    # a divider glyph for whatever reason still parses instead of
-    # failing this regex entirely and leaving every field blank.
-    # The literal word "Acres" after the lot-size number is *also* not
-    # guaranteed -- another real report just prints the bare number
-    # ("... 2216 SF · 0.186 $1,175,000 Est Value ...") with no "Acres"
-    # label and no divider before the dollar sign, so that's optional too.
-    stat_m = re.search(
-        r"(\d+)\s*Beds?\s*\S?\s*(\d+)\s*Baths?\s*\S?\s*([\d,]+)\s*SF\s*\S?\s*([\d.]+)\s*(?:Acres)?\s*\S?\s*"
-        r"\$([\d,]+)\s*Est Value\s*\S?\s*\$([\d,]+)\s*Net Equity\s*\S?\s*(.+)",
-        full_text,
-    )
-    if stat_m:
-        data["beds"] = _to_int_money(stat_m.group(1))
-        data["baths"] = _to_int_money(stat_m.group(2))
-        data["sqft"] = _to_int_money(stat_m.group(3))
-        data["lot_acres"] = _to_number(stat_m.group(4))
-        data["value_est"] = _to_int_money(stat_m.group(5))
-        data["net_equity_est"] = _to_int_money(stat_m.group(6))
-        prop_type_raw = _clean_ws(stat_m.group(7))
+    # This used to be ONE big regex matching the whole line as a fixed
+    # template (beds -> divider -> baths -> divider -> sqft -> divider ->
+    # acres -> "Acres" -> divider -> value -> "Est Value" -> divider ->
+    # equity -> "Net Equity" -> divider -> type). Three real reports in a
+    # row each broke that template in a different spot: one dropped the
+    # "|" divider before "Est Value", one dropped the "Acres" label
+    # entirely (just the bare decimal number), and there's no guarantee
+    # the next report won't drop something else. A rigid all-or-nothing
+    # match means any single format quirk blanks out EVERY field on the
+    # line, even the ones that were printed in a perfectly normal way.
+    #
+    # So each field below is found independently by searching for its own
+    # label, the same way the AVM valuation table and Active Mortgage
+    # block are parsed elsewhere in this file. That way a missing divider
+    # or label only affects the one field it touches, not the whole line.
+    def _label_num(pattern):
+        m = re.search(pattern, full_text)
+        return m.group(1) if m else None
+
+    beds_s = _label_num(r"(\d+)\s*Beds?\b")
+    baths_s = _label_num(r"(\d+)\s*Baths?\b")
+    sqft_s = _label_num(r"([\d,]+)\s*SF\b")
+    value_s = _label_num(r"\$([\d,]+)\s*Est\s*Value\b")
+    equity_s = _label_num(r"\$([\d,]+)\s*Net\s*Equity\b")
+
+    # Lot size: prefer an explicit "X Acres" label. If that's missing
+    # (seen on a real report -- just the bare decimal sitting between the
+    # SF figure and the value dollar amount, no label at all), fall back
+    # to grabbing whatever decimal number sits in that same spot.
+    lot_s = _label_num(r"([\d.]+)\s*Acres\b")
+    if lot_s is None and sqft_s and value_s:
+        between_m = re.search(
+            re.escape(sqft_s) + r"\s*SF\s*\S?\s*([\d.]+)\s*\S?\s*\$" + re.escape(value_s),
+            full_text,
+        )
+        if between_m:
+            lot_s = between_m.group(1)
+
+    # Property type is free text with no fixed vocabulary, so it's still
+    # grabbed positionally -- everything after "Net Equity" (plus an
+    # optional single divider char) up to end of line.
+    ptype_s = None
+    type_m = re.search(r"Net\s*Equity\s*\S?\s*(.+)", full_text)
+    if type_m:
+        ptype_s = type_m.group(1)
+
+    if beds_s and baths_s and sqft_s and value_s and equity_s:
+        data["beds"] = _to_int_money(beds_s)
+        data["baths"] = _to_int_money(baths_s)
+        data["sqft"] = _to_int_money(sqft_s)
+        data["lot_acres"] = _to_number(lot_s) if lot_s else None
+        data["value_est"] = _to_int_money(value_s)
+        data["net_equity_est"] = _to_int_money(equity_s)
+        prop_type_raw = _clean_ws(ptype_s or "")
         # Some reports tack extra segments onto the end of the stat line
         # after the property type (e.g. "Single Family Residential | HOA
         # $370") -- strip anything from a trailing "HOA $..." marker
         # onward so it doesn't get displayed as part of the property type.
         prop_type_raw = re.split(r"\s*\S?\s*HOA\s*\$", prop_type_raw)[0].strip()
         data["property_type"] = prop_type_raw
+        if lot_s is None:
+            data["parse_warnings"].append("Could not determine lot size (acres) from the summary line -- please double-check/fill in manually.")
     else:
         for k in ("beds", "baths", "sqft", "lot_acres", "value_est", "net_equity_est"):
             data[k] = None
