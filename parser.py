@@ -139,8 +139,12 @@ def parse_remine_pdf(file_bytes):
     # (0 or 1 divider char) instead of mandatory, so a report that drops
     # a divider glyph for whatever reason still parses instead of
     # failing this regex entirely and leaving every field blank.
+    # The literal word "Acres" after the lot-size number is *also* not
+    # guaranteed -- another real report just prints the bare number
+    # ("... 2216 SF · 0.186 $1,175,000 Est Value ...") with no "Acres"
+    # label and no divider before the dollar sign, so that's optional too.
     stat_m = re.search(
-        r"(\d+)\s*Beds?\s*\S?\s*(\d+)\s*Baths?\s*\S?\s*([\d,]+)\s*SF\s*\S?\s*([\d.]+)\s*Acres\s*\S?\s*"
+        r"(\d+)\s*Beds?\s*\S?\s*(\d+)\s*Baths?\s*\S?\s*([\d,]+)\s*SF\s*\S?\s*([\d.]+)\s*(?:Acres)?\s*\S?\s*"
         r"\$([\d,]+)\s*Est Value\s*\S?\s*\$([\d,]+)\s*Net Equity\s*\S?\s*(.+)",
         full_text,
     )
