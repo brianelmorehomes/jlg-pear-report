@@ -1,0 +1,325 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+@font-face { font-family: 'Playfair Display'; src: url('file://{{ font_dir }}/PlayfairDisplay-Reg-Final.ttf'); font-weight: 400; font-style: normal; }
+@font-face { font-family: 'Playfair Display'; src: url('file://{{ font_dir }}/PlayfairDisplay-Bold-Final.ttf'); font-weight: 700; font-style: normal; }
+@font-face { font-family: 'Playfair Display'; src: url('file://{{ font_dir }}/PlayfairDisplay-Italic-Final.ttf'); font-weight: 400; font-style: italic; }
+@font-face { font-family: 'Work Sans'; src: url('file://{{ font_dir }}/WorkSans-Reg-Final.ttf'); font-weight: 400; font-style: normal; }
+@font-face { font-family: 'Work Sans'; src: url('file://{{ font_dir }}/WorkSans-Med-Final.ttf'); font-weight: 500; font-style: normal; }
+@font-face { font-family: 'Work Sans'; src: url('file://{{ font_dir }}/WorkSans-SemiBold-Final.ttf'); font-weight: 600; font-style: normal; }
+@font-face { font-family: 'Work Sans'; src: url('file://{{ font_dir }}/WorkSans-Bold-Final.ttf'); font-weight: 700; font-style: normal; }
+
+:root {
+  --broker-blue: #032b42;
+  --broker-blue-dk: #021e30;
+  --slate: #f2f2f2;
+  --ruge: #780000;
+  --granite: #404042;
+  --white: #ffffff;
+  --hairline: #d8dcde;
+  --equity-bg: #eaf0f5;
+}
+
+* { box-sizing: border-box; }
+
+@page {
+  size: 8.5in 11in;
+  margin: 0.45in 0.55in 0.5in 0.55in;
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  font-family: 'Work Sans', sans-serif;
+  color: var(--granite);
+  font-size: 9.6pt;
+  line-height: 1.4;
+}
+
+h1, h2, h3 { margin: 0; padding: 0; }
+.serif { font-family: 'Playfair Display', serif; }
+
+/* ---------- Masthead ---------- */
+.masthead {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding-bottom: 10px;
+  border-bottom: 1.4pt solid var(--broker-blue);
+  margin-bottom: 16px;
+}
+.masthead .lockup-group { display: flex; align-items: center; gap: 12px; }
+.masthead .lockup-group img.jlg-mark { height: 30px; display: block; }
+.masthead .lockup-group img.brokerage-mark { height: 22px; display: block; }
+.masthead .meta {
+  text-align: right;
+  font-size: 7.6pt;
+  color: var(--granite);
+  letter-spacing: 0.02em;
+}
+.masthead .meta .report-label {
+  font-weight: 700;
+  color: var(--broker-blue);
+  font-size: 8.2pt;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+/* ---------- Title block ---------- */
+.title-block { margin-bottom: 18px; }
+.title-block .eyebrow {
+  font-size: 8pt;
+  font-weight: 700;
+  color: var(--ruge);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  margin-bottom: 4px;
+}
+.title-block h1 {
+  font-size: 22pt;
+  font-weight: 700;
+  color: var(--broker-blue);
+  line-height: 1.15;
+}
+.title-block .subline {
+  font-size: 9.6pt;
+  color: var(--granite);
+  margin-top: 5px;
+}
+.title-block .facts {
+  font-size: 8.4pt;
+  color: #6b6b6d;
+  margin-top: 4px;
+}
+
+/* ---------- Section shell ---------- */
+.section { margin-bottom: 14px; }
+.section-head {
+  border-bottom: 0.9pt solid var(--hairline);
+  padding-bottom: 5px;
+  margin-bottom: 10px;
+}
+.section-head .title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.section-num {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 17px;
+  height: 17px;
+  border-radius: 50%;
+  background: var(--broker-blue);
+  color: #fff;
+  font-size: 7.6pt;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+.section-head h2 {
+  font-size: 12.5pt;
+  font-weight: 700;
+  color: var(--broker-blue);
+  font-family: 'Work Sans', sans-serif;
+  white-space: nowrap;
+}
+.section-head .section-sub {
+  font-size: 7.8pt;
+  color: #8a8a8c;
+  margin-left: 25px;
+  margin-top: 1px;
+}
+
+/* ---------- Section 1: Market Valuation ---------- */
+.valuation-row { display: flex; gap: 22px; align-items: flex-start; }
+.valuation-figure { flex: 0 0 auto; }
+.valuation-figure .label {
+  font-size: 7.6pt; text-transform: uppercase; letter-spacing: 0.05em; color: #8a8a8c;
+}
+.valuation-figure .amount {
+  font-family: 'Playfair Display', serif; font-weight: 700; font-size: 25pt; color: var(--broker-blue); line-height: 1.1;
+}
+.valuation-detail { flex: 1; font-size: 9.2pt; padding-top: 4px; }
+.valuation-detail .status-line { margin-bottom: 4px; }
+.valuation-detail .status-badge {
+  display: inline-block; background: var(--broker-blue); color: #fff; font-size: 7.4pt;
+  font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; padding: 2px 7px; border-radius: 2px; margin-right: 6px;
+}
+
+/* ---------- Section 2: Equity Ledger ---------- */
+.equity-wrap { display: flex; gap: 20px; }
+.ledger {
+  flex: 0 0 2.9in;
+  background: var(--equity-bg);
+  border-radius: 4px;
+  padding: 12px 16px;
+}
+.ledger-row { display: flex; justify-content: space-between; font-size: 9.6pt; padding: 3px 0; }
+.ledger-row.neg { color: var(--ruge); }
+.ledger-row.total {
+  border-top: 1.1pt solid var(--broker-blue);
+  margin-top: 4px; padding-top: 6px;
+  font-weight: 700; font-size: 11.5pt; color: var(--broker-blue);
+}
+.equity-notes { flex: 1; padding-top: 2px; }
+.milestone {
+  font-size: 9.4pt; margin-bottom: 8px; padding-left: 14px; position: relative;
+}
+.milestone:before { content: "→"; position: absolute; left: 0; color: var(--ruge); font-weight: 700; }
+.milestone b { color: var(--broker-blue); }
+
+/* ---------- Section 3: Purchasing Power ---------- */
+.power-grid { display: flex; gap: 18px; margin-bottom: 8px; }
+.power-tile {
+  flex: 1; background: var(--slate); border-radius: 4px; padding: 10px 14px;
+}
+.power-tile .label { font-size: 7.6pt; text-transform: uppercase; letter-spacing: 0.04em; color: #8a8a8c; }
+.power-tile .amount { font-family: 'Playfair Display', serif; font-weight: 700; font-size: 17pt; color: var(--broker-blue); margin-top: 2px; }
+.power-tile .sub { font-size: 7.8pt; color: #6b6b6d; margin-top: 2px; }
+.power-note { font-size: 9.2pt; margin-top: 6px; }
+.power-note.leverage { color: #6b6b6d; font-size: 8.6pt; margin-top: 8px; }
+
+/* ---------- Section 4: Disclaimers ---------- */
+.disclaimers { font-size: 7.4pt; color: #6b6b6d; line-height: 1.5; }
+.disclaimers p { margin: 0 0 5px; }
+.disclaimers b { color: var(--granite); }
+
+/* ---------- Footer ---------- */
+.footer {
+  margin-top: 14px;
+  padding-top: 10px;
+  border-top: 0.9pt solid var(--hairline);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 8pt;
+  color: var(--granite);
+}
+.footer .agent { font-weight: 600; color: var(--broker-blue); }
+.build-credit { text-align: center; font-size: 6.6pt; color: #a3a3a5; margin-top: 8px; }
+</style>
+</head>
+<body>
+
+<div class="masthead">
+  <div class="lockup-group">
+    <img class="jlg-mark" src="file://{{ logo_jlg }}" alt="Justin Lucas Group">
+    <img class="brokerage-mark" src="file://{{ logo_brokerage }}" alt="@properties Christie's International Real Estate">
+  </div>
+  <div class="meta">
+    <div class="report-label">Professional Equity Assessment Report</div>
+    <div>Prepared {{ prepared_date }}</div>
+  </div>
+</div>
+
+<div class="title-block">
+  <div class="eyebrow">Prepared exclusively for</div>
+  <h1 class="serif">{{ f.client_name or "Valued Client" }}</h1>
+  <div class="subline">{{ f.full_address or "Property address not provided" }}</div>
+  {% if f.beds or f.baths or f.sqft %}
+  <div class="facts">
+    {%- if f.beds %}{{ f.beds }} Beds{% endif -%}
+    {%- if f.baths %} &middot; {{ f.baths }} Baths{% endif -%}
+    {%- if f.sqft %} &middot; {{ f.sqft }} SF{% endif -%}
+    {%- if f.year_built %} &middot; Built {{ f.year_built }}{% endif -%}
+    {%- if f.property_type %} &middot; {{ f.property_type }}{% endif -%}
+  </div>
+  {% endif %}
+</div>
+
+<!-- SECTION 1: MARKET VALUATION -->
+<div class="section">
+  <div class="section-head">
+    <div class="title-row"><span class="section-num">1</span><h2>Your Current Market Valuation</h2></div>
+    <div class="section-sub">A baseline snapshot from public record data and current automated valuation models</div>
+  </div>
+  <div class="valuation-row">
+    <div class="valuation-figure">
+      <div class="label">Estimated Market Value</div>
+      <div class="amount">{{ f.value | money }}</div>
+    </div>
+    <div class="valuation-detail">
+      <div class="status-line">
+        <span class="status-badge">{{ f.status_text or "Off-Market" }}</span>
+        {% if f.last_purchase_price %}
+          Last purchased{% if f.last_purchase_year %} in {{ f.last_purchase_year }}{% endif %} for {{ f.last_purchase_price | money }}
+        {% endif %}
+      </div>
+      This is a marketing-grade estimate, not a formal appraisal &mdash; it's meant to give you a real starting point for a conversation about your options.
+    </div>
+  </div>
+</div>
+
+<!-- SECTION 2: EQUITY BREAKDOWN -->
+<div class="section">
+  <div class="section-head">
+    <div class="title-row"><span class="section-num">2</span><h2>Your Accumulated Equity</h2></div>
+    <div class="section-sub">What you'd actually walk away with today</div>
+  </div>
+  <div class="equity-wrap">
+    <div class="ledger">
+      <div class="ledger-row"><span>Estimated Home Value</span><span>{{ f.value | money }}</span></div>
+      <div class="ledger-row neg"><span>Estimated Mortgage Balance</span><span>&minus; {{ f.loan_balance | money }}</span></div>
+      <div class="ledger-row total"><span>Total Estimated Equity</span><span>{{ c.total_equity | money }}</span></div>
+    </div>
+    <div class="equity-notes">
+      {% if c.equity_percent is not none %}
+      <div class="milestone"><b>Equity Milestone:</b> you now own approximately <b>{{ c.equity_percent | pct }}</b> of this home outright.</div>
+      {% endif %}
+      {% if c.appreciation is not none %}
+      <div class="milestone"><b>Value Growth:</b> your property's estimated value has grown by approximately <b>{{ c.appreciation | money }}</b>{% if f.last_purchase_year %} since your {{ f.last_purchase_year }} purchase{% endif %}.</div>
+      {% endif %}
+    </div>
+  </div>
+</div>
+
+<!-- SECTION 3: FUTURE PURCHASING POWER -->
+<div class="section">
+  <div class="section-head">
+    <div class="title-row"><span class="section-num">3</span><h2>Your Future Purchasing Power</h2></div>
+    <div class="section-sub">How this equity could work for your next move</div>
+  </div>
+  <div class="power-grid">
+    <div class="power-tile">
+      <div class="label">Max Next-Home Down Payment Power</div>
+      <div class="amount">{{ c.down_payment_power | money }}</div>
+      <div class="sub">Based on accessing up to 80% of your current equity, leaving a buffer for closing costs</div>
+    </div>
+    <div class="power-tile">
+      <div class="label">Move-Up Buyer Potential</div>
+      <div class="amount">{{ c.move_up_down_payment_pct | pct }}</div>
+      <div class="sub">Down payment on a {{ c.target_price | money }} home
+        {%- if c.pmi_eliminated %}, eliminating PMI entirely{% elif c.move_up_down_payment_pct is not none %}, still well above a typical minimum down payment{% endif %}
+      </div>
+    </div>
+  </div>
+  <div class="power-note leverage">
+    This equity can also fully fund a second property purchase, a substantial renovation, or serve as a cash reserve as you plan your next move &mdash; happy to walk through what fits your goals best.
+  </div>
+</div>
+
+<!-- SECTION 4: DISCLAIMERS -->
+<div class="section">
+  <div class="section-head">
+    <div class="title-row"><span class="section-num">4</span><h2>Important Notes</h2></div>
+  </div>
+  <div class="disclaimers">
+    <p><b>On loan data:</b> the mortgage balance shown is estimated from public filing history. It does not reflect any recent principal prepayments, refinances, or home equity lines of credit that may not yet be on public record.</p>
+    <p><b>Not an appraisal:</b> this report is a marketing and planning tool, not a formal appraisal or a final transactional net sheet. Actual proceeds at closing depend on your specific loan payoff, selling costs, and market conditions at the time of sale.</p>
+  </div>
+</div>
+
+<div class="footer">
+  <div>
+    <div class="agent">{{ agent_name }}</div>
+    <div>{{ agent_phone }}{% if agent_phone and agent_email %} &middot; {% endif %}{{ agent_email }}</div>
+  </div>
+  <div>Justin Lucas Group &middot; @properties Christie's International Real Estate</div>
+</div>
+<p class="build-credit">&copy; {{ current_year }} Brian Elmore. All rights reserved. This tool may not be reproduced or redistributed without permission.</p>
+
+</body>
+</html>
