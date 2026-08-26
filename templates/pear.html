@@ -230,7 +230,10 @@ h1, h2, h3 { margin: 0; padding: 0; }
 .letter-greeting { font-size: 9.6pt; margin-bottom: 12px; }
 .letter-body p { margin: 0 0 11px; font-size: 9.6pt; line-height: 1.6; }
 .letter-signoff { margin-top: 18px; font-size: 9.6pt; }
-.letter-signoff .agent-name { font-weight: 700; color: var(--broker-blue); margin-top: 18px; }
+/* Extra margin-top here (vs. a normal ~4-6px paragraph gap) leaves room
+   to physically sign the printed letter by hand between "Warm regards,"
+   and the printed name, the way a real mailed business letter would. */
+.letter-signoff .agent-name { font-weight: 700; color: var(--broker-blue); margin-top: 56px; }
 .letter-signoff .agent-contact { font-size: 8.6pt; color: var(--granite); margin-top: 2px; }
 .letter-signoff .brokerage-line { font-size: 8pt; color: #8a8a8c; margin-top: 2px; }
 

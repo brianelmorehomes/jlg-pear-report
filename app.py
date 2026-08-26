@@ -220,6 +220,42 @@ def _split_address_for_letter(full_address):
     return street.strip().title(), f"{city.strip().title()}, {state} {zip_code}"
 
 
+def _first_names_only(name):
+    """'Dear John,' reads like an actual personal letter; 'Dear John Doe,'
+    reads like a mail-merge. This drops each person down to just their
+    first name for the salutation specifically -- the inside address
+    (recipient_name) still uses the full name, which is normal business-
+    letter convention. A two-owner name ('John Doe and Jane Doe', the
+    format _format_owner_names() in parser.py produces) is split on
+    ' and ' first so BOTH first names survive ('John and Jane') instead
+    of collapsing to just the first owner. The 'Homeowner' fallback has
+    no second word to lose, so it passes through unchanged either way."""
+    if not name:
+        return name
+    parts = name.split(" and ")
+    firsts = [p.strip().split()[0] for p in parts if p.strip().split()]
+    return " and ".join(firsts) if firsts else name
+
+
+def _format_address_for_display(full_address):
+    """Remine's header line is public-record all-caps ('6350 N HERMITAGE
+    AVE CHICAGO IL 60660'). That's fine sitting in a stat line on the
+    PEAR report itself, but reads like a data dump in the middle of a
+    cover-letter sentence ('...the numbers for 6350 N HERMITAGE AVE
+    CHICAGO IL 60660 were worth sharing'). Reuses the same street/city/
+    state/zip split as the inside address block so the state abbreviation
+    and zip stay exactly as printed rather than getting title-cased into
+    something like 'Il'."""
+    addr = (full_address or "").strip()
+    if not addr:
+        return addr
+    m = re.match(r"^(.*)\s+([A-Za-z]+)\s+([A-Z]{2})\s+(\d{5}(?:-\d{4})?)$", addr)
+    if not m:
+        return addr.title()
+    street, city, state, zip_code = m.groups()
+    return f"{street.strip().title()} {city.strip().title()}, {state} {zip_code}"
+
+
 def _build_letter(data, fields, letter_template, agent_name):
     """Builds the `letter` dict render_pear()/pear.html expects, for one
     property, by mail-merging letter_template (the shared, agent-edited
@@ -233,7 +269,7 @@ def _build_letter(data, fields, letter_template, agent_name):
     greeting_name = safe_name or "Homeowner"
 
     address_line1, address_line2 = _split_address_for_letter(fields.get("full_address"))
-    property_address = fields.get("full_address") or "your property"
+    property_address = _format_address_for_display(fields.get("full_address")) or "your property"
 
     merged = (letter_template or DEFAULT_LETTER_BODY)
     merged = merged.replace("{{owner_name}}", greeting_name)
@@ -246,7 +282,7 @@ def _build_letter(data, fields, letter_template, agent_name):
         "recipient_name": greeting_name if used_fallback else owner_name or greeting_name,
         "address_line1": address_line1,
         "address_line2": address_line2,
-        "greeting": greeting_name,
+        "greeting": _first_names_only(greeting_name),
         "paragraphs": paragraphs,
     }
     return letter, used_fallback
