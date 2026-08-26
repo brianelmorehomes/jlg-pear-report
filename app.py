@@ -9,7 +9,6 @@ Assessment Report, review/edit every field, then generate a branded,
 Run with:  python3 app.py
 Then open: http://localhost:5000
 """
-import json
 import os
 import re
 import traceback
@@ -23,32 +22,27 @@ from render import render_pear
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 OUTPUT_DIR = os.path.join(BASE_DIR, "output")
-CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 50 * 1024 * 1024  # 50MB upload cap
 
-
-def load_config():
-    default = {
-        "agent_name": "Brian Elmore",
-        "agent_phone": "",
-        "agent_email": "brian@justinlucasgroup.com",
-        "print_safe_logo": False,
-    }
-    if os.path.exists(CONFIG_PATH):
-        try:
-            with open(CONFIG_PATH) as f:
-                default.update(json.load(f))
-        except Exception:
-            pass
-    return default
-
-
-def save_config(cfg):
-    with open(CONFIG_PATH, "w") as f:
-        json.dump(cfg, f, indent=2)
+# Agent name/phone/email/print-safe-logo used to persist server-side in a
+# config.json shared by every visitor -- fine for Brian alone, but wrong
+# the moment a second agent (Justin, Eric, Camille) opens this same
+# deployed app on their own computer: whoever generated a report last
+# would silently overwrite the default the NEXT person sees, regardless
+# of whose machine it was. That's now handled entirely client-side via
+# localStorage instead (see the PAGE template's JS below) -- each
+# person's own browser remembers their own info, independent of anyone
+# else's. These are just the first-ever-visit fallback, shown only
+# until a browser's localStorage has something saved.
+DEFAULT_AGENT = {
+    "agent_name": "Brian Elmore",
+    "agent_phone": "",
+    "agent_email": "brian@justinlucasgroup.com",
+    "print_safe_logo": False,
+}
 
 
 def _num(v):
@@ -265,6 +259,44 @@ PAGE = """
 </div>
 
 <script>
+// Remembers agent name/phone/email/print-safe-logo on THIS device only,
+// via localStorage -- once someone fills these in once on their own
+// computer, they stay put on future visits from that same browser
+// until changed, without affecting what anyone else sees on theirs.
+// (A real HTTP cookie would work too, but localStorage needs no
+// server round-trip and is the more standard tool for "remember a
+// setting on this device.") First-ever visit on a given browser falls
+// back to whatever the server rendered (see DEFAULT_AGENT in app.py).
+const AGENT_STORAGE_KEY = 'pear_agent_settings_v1';
+
+function loadAgentSettings() {
+  try {
+    const raw = localStorage.getItem(AGENT_STORAGE_KEY);
+    if (!raw) return;
+    const saved = JSON.parse(raw);
+    if (saved.agent_name != null) document.getElementById('agentName').value = saved.agent_name;
+    if (saved.agent_phone != null) document.getElementById('agentPhone').value = saved.agent_phone;
+    if (saved.agent_email != null) document.getElementById('agentEmail').value = saved.agent_email;
+    if (saved.print_safe_logo != null) document.getElementById('printSafeLogo').checked = !!saved.print_safe_logo;
+  } catch (e) { /* localStorage unavailable (private browsing, etc) -- fall back to server defaults silently */ }
+}
+
+function saveAgentSettings() {
+  try {
+    localStorage.setItem(AGENT_STORAGE_KEY, JSON.stringify({
+      agent_name: document.getElementById('agentName').value,
+      agent_phone: document.getElementById('agentPhone').value,
+      agent_email: document.getElementById('agentEmail').value,
+      print_safe_logo: document.getElementById('printSafeLogo').checked,
+    }));
+  } catch (e) { /* ignore -- worst case it just doesn't persist this time */ }
+}
+
+loadAgentSettings();
+['agentName', 'agentPhone', 'agentEmail', 'printSafeLogo'].forEach(id => {
+  document.getElementById(id).addEventListener('change', saveAgentSettings);
+});
+
 const dz = document.getElementById('dropzone');
 const fileInput = document.getElementById('fileInput');
 const statusEl = document.getElementById('status');
@@ -412,6 +444,7 @@ function updatePreview() {
 }
 
 generateBtn.addEventListener('click', () => {
+  saveAgentSettings(); // safety net in case 'change' didn't fire for some reason
   const form = new FormData();
   form.append('agent_name', document.getElementById('agentName').value);
   form.append('agent_phone', document.getElementById('agentPhone').value);
@@ -462,7 +495,7 @@ generateBtn.addEventListener('click', () => {
 
 @app.route("/")
 def index():
-    return render_template_string(PAGE, cfg=load_config())
+    return render_template_string(PAGE, cfg=DEFAULT_AGENT)
 
 
 @app.route("/parse", methods=["POST"])
@@ -488,16 +521,14 @@ def parse():
 
 @app.route("/generate", methods=["POST"])
 def generate():
+    # Agent name/phone/email/print-safe-logo are no longer persisted here --
+    # that's now the browser's job via localStorage (see the PAGE template's
+    # JS). This route just uses whatever the form submitted for this one
+    # PDF, same as any other field.
     agent_name = request.form.get("agent_name", "").strip() or "Brian Elmore"
     agent_phone = request.form.get("agent_phone", "").strip()
     agent_email = request.form.get("agent_email", "").strip() or "brian@justinlucasgroup.com"
     print_safe_logo = bool(request.form.get("print_safe_logo", "").strip())
-    save_config({
-        "agent_name": agent_name,
-        "agent_phone": agent_phone,
-        "agent_email": agent_email,
-        "print_safe_logo": print_safe_logo,
-    })
 
     try:
         value = _num(request.form.get("value"))
