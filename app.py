@@ -172,7 +172,7 @@ PAGE = """
     <div class="row">
       <div class="field">
         <label>Client name (shown on report)</label>
-        <input type="text" id="clientName" placeholder="e.g. John and Jane Doe">
+        <input type="text" id="clientName" placeholder="e.g. John and Jane Doe" autocomplete="off">
       </div>
     </div>
     <div class="field helper">This defaults from the report's public-record owner name once you upload &mdash; edit it to whatever you'd like shown (nickname, "the Jenks Family," etc).</div>
@@ -210,7 +210,7 @@ PAGE = """
     <div id="warnBox"></div>
     <div class="section-divider">Property</div>
     <div class="row">
-      <div class="field"><label>Full address</label><input type="text" id="f_full_address"></div>
+      <div class="field"><label>Full address</label><input type="text" id="f_full_address" autocomplete="off"></div>
     </div>
     <div class="row">
       <div class="field"><label>Beds</label><input type="text" id="f_beds"></div>
@@ -220,7 +220,6 @@ PAGE = """
     </div>
     <div class="row">
       <div class="field"><label>Property type</label><input type="text" id="f_property_type"></div>
-      <div class="field"><label>Status badge text</label><input type="text" id="f_status_text" placeholder="Off-Market"></div>
     </div>
 
     <div class="section-divider">Valuation &amp; Equity</div>
@@ -275,7 +274,7 @@ const livePreview = document.getElementById('livePreview');
 const generateBtn = document.getElementById('generateBtn');
 const reparseBtn = document.getElementById('reparseBtn');
 
-const FIELD_IDS = ['full_address','beds','baths','sqft','year_built','property_type','status_text',
+const FIELD_IDS = ['full_address','beds','baths','sqft','year_built','property_type',
                     'value','loan_balance','last_purchase_price','last_purchase_year','target_price',
                     'avm_fa_est','avm_fa_low','avm_fa_high','avm_zillow_est','avm_zillow_low','avm_zillow_high',
                     'avm_remine_est','avm_remine_low','avm_remine_high'];
@@ -308,6 +307,19 @@ reparseBtn.addEventListener('click', () => {
   dz.innerHTML = '<p><strong>Drag &amp; drop the Remine PDF here</strong></p><p class="hint">or click to browse &mdash; one property at a time</p>';
   reviewCard.classList.add('hidden');
   statusEl.textContent = '';
+  // Clear every review field, not just the tracking -- otherwise a
+  // leftover value from the PREVIOUS property (e.g. an address you'd
+  // manually corrected) can silently survive into the NEXT report,
+  // because smartSet() treats any non-blank field as a deliberate edit
+  // it shouldn't overwrite. This bit Brian for real: an old office
+  // address ("2 N Whittaker St") carried over into an unrelated
+  // client's report because Start Over hid the card without wiping the
+  // inputs underneath it.
+  document.getElementById('clientName').value = '';
+  FIELD_IDS.forEach(id => { const el = document.getElementById('f_' + id); if (el) el.value = ''; });
+  document.getElementById('avmHelper').textContent = '';
+  warnBox.innerHTML = '';
+  livePreview.textContent = '';
 });
 
 function handleFile(file) {
@@ -352,7 +364,6 @@ function populateReview(data) {
   smartSet('f_sqft', data.sqft ?? '');
   smartSet('f_year_built', data.year_built ?? '');
   smartSet('f_property_type', data.property_type || '');
-  smartSet('f_status_text', data.status || 'Off-Market');
   smartSet('f_value', (data.value_est_avg ?? data.value_est) ?? '');
   smartSet('f_loan_balance', data.loan_balance_est ?? '');
   smartSet('f_last_purchase_price', data.last_sale_price ?? '');
@@ -510,7 +521,6 @@ def generate():
             "sqft": request.form.get("sqft", "").strip(),
             "year_built": request.form.get("year_built", "").strip(),
             "property_type": request.form.get("property_type", "").strip(),
-            "status_text": request.form.get("status_text", "").strip(),
             "value": value,
             "loan_balance": loan_balance,
             "last_purchase_price": last_purchase_price,
@@ -525,8 +535,14 @@ def generate():
             agent_name=agent_name, agent_phone=agent_phone, agent_email=agent_email,
             print_safe_logo=print_safe_logo,
         )
+        # Filename includes the property address (Brian's ask -- makes a
+        # folder of reports scannable/searchable by property, since one
+        # client can have multiple properties and one address can get
+        # multiple reports over time) plus the client name for clarity
+        # when several files land in the same downloads folder.
+        safe_address = re.sub(r"[^A-Za-z0-9]+", "_", fields["full_address"] or "Property").strip("_")
         safe_client = re.sub(r"[^A-Za-z0-9]+", "_", fields["client_name"] or "Client").strip("_")
-        download_name = f"PEAR_Report_{safe_client}.pdf"
+        download_name = f"PEAR_Report_{safe_address}_{safe_client}.pdf"
         return send_file(out_path, as_attachment=True, download_name=download_name)
     except Exception as e:
         traceback.print_exc()
