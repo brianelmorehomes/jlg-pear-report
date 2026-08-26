@@ -273,12 +273,12 @@ h1, h2, h3 { margin: 0; padding: 0; }
     </div>
     <div class="valuation-detail">
       <div class="status-line">
-        <span class="status-badge">{{ f.status_text or "Off-Market" }}</span>
+        <span class="status-badge">Off Market</span>
         {% if f.last_purchase_price %}
           Last purchased{% if f.last_purchase_year %} in {{ f.last_purchase_year }}{% endif %} for {{ f.last_purchase_price | money }}
         {% endif %}
       </div>
-      This is a marketing-grade estimate, not a formal appraisal &mdash; it's meant to give you a real starting point for a conversation about your options.
+      This is a marketing-grade estimate, not a formal appraisal. It's meant to give you a real starting point for a conversation about your options.
     </div>
   </div>
   {% if f.avms %}
@@ -339,7 +339,7 @@ h1, h2, h3 { margin: 0; padding: 0; }
     </div>
   </div>
   <div class="power-note leverage">
-    This equity can also fully fund a second property purchase, a substantial renovation, or serve as a cash reserve as you plan your next move &mdash; happy to walk through what fits your goals best.
+    This equity can also fully fund a second property purchase, a substantial renovation, or serve as a cash reserve as you plan your next move. Happy to walk through what fits your goals best.
   </div>
 </div>
 
@@ -350,7 +350,8 @@ h1, h2, h3 { margin: 0; padding: 0; }
   </div>
   <div class="disclaimers">
     <p><b>On loan data:</b> the mortgage balance shown is estimated from public filing history. It does not reflect any recent principal prepayments, refinances, or home equity lines of credit that may not yet be on public record.</p>
-    <p><b>Not an Appraisal or Professional Comparative Market Analysis:</b> if you would like a detailed market analysis, {{ agent_name }} would be happy to provide that for you. Just reach out!</p>
+    <p><b>Not an Appraisal or Professional Comparative Market Analysis:</b> if you would like a detailed market analysis, {{ agent_first_name }} would be happy to provide that for you. Just reach out!</p>
+    <p><b>For informational purposes only:</b> this report is provided for general informational purposes and does not constitute an offer of representation. If you are already working with a real estate agent, please disregard this as it is not a solicitation of your business.</p>
   </div>
 </div>
 
