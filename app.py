@@ -425,13 +425,23 @@ generateBtn.addEventListener('click', () => {
   fetch('/generate', { method: 'POST', body: form })
     .then(r => {
       if (!r.ok) return r.json().then(e => { throw new Error(e.error || 'Failed'); });
-      return r.blob();
+      // Pull the real filename (address + client name) out of the
+      // Content-Disposition header the server sends -- a blob download
+      // via JS ignores that header entirely unless we read it ourselves
+      // and set it as the <a download> attribute below. Hardcoding
+      // 'PEAR_Report.pdf' here previously meant the backend's filename
+      // fix (adding the property address) never actually showed up in
+      // the downloaded file, even though the server was sending it correctly.
+      const cd = r.headers.get('Content-Disposition') || '';
+      const match = cd.match(/filename="?([^";]+)"?/);
+      const filename = match ? match[1] : 'PEAR_Report.pdf';
+      return r.blob().then(blob => ({ blob, filename }));
     })
-    .then(blob => {
+    .then(({ blob, filename }) => {
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = 'PEAR_Report.pdf';
+      a.download = filename;
       document.body.appendChild(a);
       a.click();
       a.remove();
