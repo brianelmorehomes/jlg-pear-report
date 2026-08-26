@@ -17,6 +17,12 @@ FONT_DIR = os.path.join(STATIC_DIR, "fonts")
 JLG_BLOCK = os.path.join(STATIC_DIR, "logo", "JLG-COMBO-BLUE.png")
 BROKERAGE_LOCKUP = os.path.join(STATIC_DIR, "logo", "at-properties-christies-color.png")
 BROKERAGE_LOCKUP_BW = os.path.join(STATIC_DIR, "logo", "at-properties-christies-blackonly.png")
+# Equal Housing Opportunity + REALTOR bugs, side by side -- small and
+# subtle in the footer, but present on every report. These are being
+# mailed to people, which puts them squarely in "real estate advertising
+# material" territory under the Fair Housing Act, so the EHO mark needs to
+# be there regardless of how polished the rest of the design is.
+FAIR_HOUSING_BUGS = os.path.join(STATIC_DIR, "logo", "fair-housing-realtor-bugs.png")
 
 
 def money(n):
@@ -59,6 +65,7 @@ def render_pear(fields, computed, output_path, agent_name="Brian Elmore", agent_
         font_dir=FONT_DIR,
         logo_jlg=JLG_BLOCK,
         logo_brokerage=BROKERAGE_LOCKUP_BW if print_safe_logo else BROKERAGE_LOCKUP,
+        logo_fair_housing=FAIR_HOUSING_BUGS,
         agent_name=agent_name,
         agent_phone=agent_phone,
         agent_email=agent_email or "brian@justinlucasgroup.com",
