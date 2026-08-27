@@ -51,7 +51,7 @@ body {
    behaves exactly like "pinned to this page's bottom edge." Coordinates
    are relative to the page's margin box, so bottom:0/left:0/right:0
    lines up flush with the @page margins declared above. */
-.page-wrap { padding-bottom: 0.7in; } /* keeps normal content from ever running under the fixed footer */
+.page-wrap { padding-bottom: 0.7in; } /* keeps normal content from ever running under the fixed footer -- this doesn't actually control the visible gap above the footer (it's position:fixed and ignores normal flow), it only guards against long reports overlapping it, so it's kept tight rather than padded out further */
 .footer-pin {
   position: fixed;
   bottom: 0;
@@ -257,7 +257,7 @@ h1, h2, h3 { margin: 0; padding: 0; }
    working website link isn't. */
 .footer {
   margin-top: 14px;
-  padding: 10px 14px;
+  padding: 7px 14px;
   background: var(--equity-bg);
   border-radius: 4px 4px 0 0;
   display: flex;
@@ -266,7 +266,7 @@ h1, h2, h3 { margin: 0; padding: 0; }
   font-size: 8pt;
   color: var(--granite);
 }
-.footer .agent { font-weight: 700; color: var(--broker-blue); font-size: 9pt; }
+.footer .agent { font-weight: 700; color: var(--broker-blue); font-size: 8.6pt; }
 .footer-right { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
 .footer-website { font-weight: 700; color: var(--broker-blue); font-size: 8.6pt; }
 .fair-housing-bug { height: 12pt; width: auto; opacity: .82; display: block; }
@@ -427,7 +427,7 @@ h1, h2, h3 { margin: 0; padding: 0; }
     <div class="title-row"><span class="section-num">4</span><h2>Important Notes</h2></div>
   </div>
   <div class="disclaimers">
-    <p><b>On loan data:</b> the mortgage balance shown is estimated from public filing history. It does not reflect any recent principal prepayments, refinances, or home equity lines of credit that may not yet be on public record.</p>
+    <p><b>On loan data:</b> the mortgage balance shown is estimated using public county property records, not private lender or credit information. It does not reflect any recent principal prepayments, refinances, or home equity lines of credit that may not yet be on public record.</p>
     <p><b>Not an Appraisal or Professional Comparative Market Analysis:</b> if you would like a detailed market analysis, I would be happy to provide that for you. Just reach out!</p>
     <p><b>For informational purposes only:</b> this is not an offer of representation, and if you're already working with an agent, please disregard it. If you are not currently working with an agent, I'd welcome the chance to help.</p>
   </div>
