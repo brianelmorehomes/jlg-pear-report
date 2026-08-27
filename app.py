@@ -1610,6 +1610,16 @@ def generate_mailer():
                 fields, computed = _default_fields_from_parsed(data)
                 letter, used_fallback_greeting = _build_letter(data, fields, letter_template, agent_name)
 
+                # Keep the enclosed PEAR report consistent with the letter
+                # sitting right in front of it -- a mailed piece that opens
+                # with "Dear Homeowner," but then names an actual (possibly
+                # wrong) person, or falls back to the generic "Valued
+                # Client," a couple pages later reads like two different
+                # documents got stapled together. Same fallback decision
+                # (_safe_greeting_name via _build_letter) drives both.
+                if used_fallback_greeting:
+                    fields["client_name"] = "Current Homeowner"
+
                 out_name = f"PEAR_{uuid.uuid4().hex[:8]}.pdf"
                 out_path = os.path.join(OUTPUT_DIR, out_name)
                 render_pear(
