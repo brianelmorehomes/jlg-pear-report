@@ -50,15 +50,15 @@ def _agent_photo_path(agent_name):
     return path if os.path.isfile(path) else None
 
 
-# Personal-site links for the "About your agent" card in Mailer mode --
-# same first-name lookup pattern as the photo above. Only Brian and
-# Justin have a live personal/team site right now; Eric's isn't decided
-# yet and Camille's isn't relevant yet, so both are simply left out
-# rather than guessing at a URL -- the card just omits the website line
-# entirely when there's no entry, rather than showing something wrong.
+# Personal-site links shown in the mailer letter's masthead/footer --
+# same first-name lookup pattern as the photo above. Camille doesn't
+# have a site yet, so she's simply left out rather than guessing at a
+# URL -- the footer just omits the website line entirely when there's
+# no entry, rather than showing something wrong.
 _AGENT_WEBSITES = {
     "brian": "brianelmorehomes.com",
     "justin": "justinlucasgroup.com",
+    "eric": "erictaylorchicago.com",
 }
 
 

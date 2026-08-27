@@ -225,6 +225,16 @@ h1, h2, h3 { margin: 0; padding: 0; }
    work here -- that's a feature, not a bug, for a mailed piece: contact
    info and the Fair Housing/REALTOR marks belong on every page. */
 .letter-wrap { padding-bottom: 0.7in; page-break-after: always; }
+/* Sender intro -- lives in the letter's masthead, mirroring how the
+   report page uses that same right-hand masthead slot for the "prepared
+   date" meta block. Puts a face to the letter before the recipient even
+   starts reading, instead of down by the signature where a photo reads
+   like it's about to sign the page for you. */
+.masthead .sender-intro { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
+.masthead .sender-text { flex-shrink: 0; }
+.masthead .sender-photo { width: 34pt; height: 34pt; border-radius: 50%; object-fit: cover; flex-shrink: 0; }
+.masthead .sender-name { font-weight: 700; color: var(--broker-blue); font-size: 9.6pt; text-align: right; white-space: nowrap; }
+.masthead .sender-tagline { font-size: 7.6pt; color: var(--granite); text-align: right; margin-top: 1px; white-space: nowrap; }
 .letter-date { font-size: 9.4pt; color: var(--granite); margin: 40px 0 20px; }
 .letter-address { font-size: 9.6pt; line-height: 1.5; margin-bottom: 20px; }
 .letter-greeting { font-size: 9.6pt; margin-bottom: 12px; }
@@ -232,38 +242,33 @@ h1, h2, h3 { margin: 0; padding: 0; }
 .letter-signoff { margin-top: 18px; font-size: 9.6pt; }
 /* Extra margin-top here (vs. a normal ~4-6px paragraph gap) leaves room
    to physically sign the printed letter by hand between "Warm regards,"
-   and the printed name/photo row below, the way a real mailed business
-   letter would. */
-.letter-signoff .signoff-row { display: flex; align-items: center; gap: 10px; margin-top: 56px; }
-.letter-signoff .signoff-photo { width: 32pt; height: 32pt; border-radius: 50%; object-fit: cover; display: block; flex-shrink: 0; }
-.letter-signoff .agent-name { font-weight: 700; color: var(--broker-blue); margin: 0; }
-.letter-signoff .agent-contact { font-size: 8.6pt; color: var(--granite); margin-top: 2px; }
-.letter-signoff .brokerage-line { font-size: 8pt; color: #8a8a8c; margin-top: 2px; }
-
-/* "About your agent" card -- a second, more deliberate trust-building
-   element separate from the handwritten-signature block above. Bigger
-   photo than the signature row, plus the brokerage line and (when known)
-   a personal site link -- info a first-time recipient might not yet
-   associate with the name on the signature line above. */
-.agent-card { display: flex; align-items: center; gap: 14px; margin-top: 28px; padding-top: 16px; border-top: 0.75pt solid var(--hairline); }
-.agent-card-photo { width: 48pt; height: 48pt; border-radius: 50%; object-fit: cover; flex-shrink: 0; }
-.agent-card-name { font-weight: 700; color: var(--broker-blue); font-size: 10pt; }
-.agent-card-brokerage { font-size: 8pt; color: var(--granite); margin-top: 2px; }
-.agent-card-website { font-size: 8pt; color: var(--broker-blue); font-weight: 600; margin-top: 2px; }
+   and the printed name -- kept deliberately plain, no photo here, so
+   nothing sits where an actual pen signature is meant to go. */
+.letter-signoff .agent-name { font-weight: 700; color: var(--broker-blue); margin-top: 56px; }
 
 /* ---------- Footer ---------- */
+/* A tinted band rather than a plain hairline-topped text row -- gives
+   the page's one repeating element (position:fixed, shows on every page
+   in CSS Paged Media) some actual presence instead of reading like an
+   afterthought. Swaps the old spelled-out brokerage line for the
+   agent's personal site (when one exists) since the brokerage is
+   already identified visually by the logos in every page's own
+   masthead -- naming it a third time here was pure repetition, a
+   working website link isn't. */
 .footer {
   margin-top: 14px;
-  padding-top: 10px;
-  border-top: 0.9pt solid var(--hairline);
+  padding: 10px 14px;
+  background: var(--equity-bg);
+  border-radius: 4px 4px 0 0;
   display: flex;
   justify-content: space-between;
   align-items: center;
   font-size: 8pt;
   color: var(--granite);
 }
-.footer .agent { font-weight: 600; color: var(--broker-blue); }
+.footer .agent { font-weight: 700; color: var(--broker-blue); font-size: 9pt; }
 .footer-right { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
+.footer-website { font-weight: 700; color: var(--broker-blue); font-size: 8.6pt; }
 .fair-housing-bug { height: 12pt; width: auto; opacity: .82; display: block; }
 .build-credit { text-align: center; font-size: 6.6pt; color: #a3a3a5; margin-top: 8px; }
 </style>
@@ -277,6 +282,13 @@ h1, h2, h3 { margin: 0; padding: 0; }
       <img class="jlg-mark" src="file://{{ logo_jlg }}" alt="Justin Lucas Group">
       <img class="brokerage-mark" src="file://{{ logo_brokerage }}" alt="@properties Christie's International Real Estate">
     </div>
+    <div class="sender-intro">
+      <div class="sender-text">
+        <div class="sender-name">{{ agent_name }}</div>
+        <div class="sender-tagline">Justin Lucas Group</div>
+      </div>
+      {% if agent_photo %}<img class="sender-photo" src="file://{{ agent_photo }}" alt="{{ agent_name }}">{% endif %}
+    </div>
   </div>
 
   <div class="letter-date">{{ letter.date }}</div>
@@ -289,25 +301,11 @@ h1, h2, h3 { margin: 0; padding: 0; }
     {% for para in letter.paragraphs %}<p>{{ para }}</p>{% endfor %}
   </div>
   <div class="letter-signoff">
-    <!-- Contact info and the brokerage line aren't repeated here -- the
-         page footer below (position:fixed, repeats on every page in
-         paged media) already shows both, directly under this signature,
-         so duplicating them a second time just a few lines up read as
-         redundant rather than emphatic. -->
+    <!-- No photo, no repeated contact/brokerage info here -- this is
+         purely the traditional close, kept clear for an actual pen
+         signature between this line and the printed name. -->
     <p>Warm regards,</p>
-    <div class="signoff-row">
-      {% if agent_photo %}<img class="signoff-photo" src="file://{{ agent_photo }}" alt="{{ agent_name }}">{% endif %}
-      <p class="agent-name">{{ agent_name }}</p>
-    </div>
-  </div>
-
-  <div class="agent-card">
-    {% if agent_photo %}<img class="agent-card-photo" src="file://{{ agent_photo }}" alt="{{ agent_name }}">{% endif %}
-    <div>
-      <div class="agent-card-name">{{ agent_name }}</div>
-      <div class="agent-card-brokerage">Justin Lucas Group &middot; @properties Christie's International Real Estate</div>
-      {% if agent_website %}<div class="agent-card-website">{{ agent_website }}</div>{% endif %}
-    </div>
+    <p class="agent-name">{{ agent_name }}</p>
   </div>
 </div>
 {% endif %}
@@ -441,7 +439,7 @@ h1, h2, h3 { margin: 0; padding: 0; }
     <div>{{ agent_phone }}{% if agent_phone and agent_email %} &middot; {% endif %}{{ agent_email }}</div>
   </div>
   <div class="footer-right">
-    <div>Justin Lucas Group &middot; @properties Christie's International Real Estate</div>
+    {% if agent_website %}<div class="footer-website">{{ agent_website }}</div>{% endif %}
     <img class="fair-housing-bug" src="file://{{ logo_fair_housing }}" alt="Equal Housing Opportunity / REALTOR">
   </div>
 </div>
