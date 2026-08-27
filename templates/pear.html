@@ -232,10 +232,24 @@ h1, h2, h3 { margin: 0; padding: 0; }
 .letter-signoff { margin-top: 18px; font-size: 9.6pt; }
 /* Extra margin-top here (vs. a normal ~4-6px paragraph gap) leaves room
    to physically sign the printed letter by hand between "Warm regards,"
-   and the printed name, the way a real mailed business letter would. */
-.letter-signoff .agent-name { font-weight: 700; color: var(--broker-blue); margin-top: 56px; }
+   and the printed name/photo row below, the way a real mailed business
+   letter would. */
+.letter-signoff .signoff-row { display: flex; align-items: center; gap: 10px; margin-top: 56px; }
+.letter-signoff .signoff-photo { width: 32pt; height: 32pt; border-radius: 50%; object-fit: cover; display: block; flex-shrink: 0; }
+.letter-signoff .agent-name { font-weight: 700; color: var(--broker-blue); margin: 0; }
 .letter-signoff .agent-contact { font-size: 8.6pt; color: var(--granite); margin-top: 2px; }
 .letter-signoff .brokerage-line { font-size: 8pt; color: #8a8a8c; margin-top: 2px; }
+
+/* "About your agent" card -- a second, more deliberate trust-building
+   element separate from the handwritten-signature block above. Bigger
+   photo than the signature row, plus the brokerage line and (when known)
+   a personal site link -- info a first-time recipient might not yet
+   associate with the name on the signature line above. */
+.agent-card { display: flex; align-items: center; gap: 14px; margin-top: 28px; padding-top: 16px; border-top: 0.75pt solid var(--hairline); }
+.agent-card-photo { width: 48pt; height: 48pt; border-radius: 50%; object-fit: cover; flex-shrink: 0; }
+.agent-card-name { font-weight: 700; color: var(--broker-blue); font-size: 10pt; }
+.agent-card-brokerage { font-size: 8pt; color: var(--granite); margin-top: 2px; }
+.agent-card-website { font-size: 8pt; color: var(--broker-blue); font-weight: 600; margin-top: 2px; }
 
 /* ---------- Footer ---------- */
 .footer {
@@ -281,7 +295,19 @@ h1, h2, h3 { margin: 0; padding: 0; }
          so duplicating them a second time just a few lines up read as
          redundant rather than emphatic. -->
     <p>Warm regards,</p>
-    <p class="agent-name">{{ agent_name }}</p>
+    <div class="signoff-row">
+      {% if agent_photo %}<img class="signoff-photo" src="file://{{ agent_photo }}" alt="{{ agent_name }}">{% endif %}
+      <p class="agent-name">{{ agent_name }}</p>
+    </div>
+  </div>
+
+  <div class="agent-card">
+    {% if agent_photo %}<img class="agent-card-photo" src="file://{{ agent_photo }}" alt="{{ agent_name }}">{% endif %}
+    <div>
+      <div class="agent-card-name">{{ agent_name }}</div>
+      <div class="agent-card-brokerage">Justin Lucas Group &middot; @properties Christie's International Real Estate</div>
+      {% if agent_website %}<div class="agent-card-website">{{ agent_website }}</div>{% endif %}
+    </div>
   </div>
 </div>
 {% endif %}

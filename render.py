@@ -24,6 +24,48 @@ BROKERAGE_LOCKUP_BW = os.path.join(STATIC_DIR, "logo", "at-properties-christies-
 # be there regardless of how polished the rest of the design is.
 FAIR_HOUSING_BUGS = os.path.join(STATIC_DIR, "logo", "fair-housing-realtor-bugs.png")
 
+# Circular headshot badges, reused as-is from the Social Media Post
+# Generator's asset set (assets/images/social/agent-<name>.png in the
+# main JLG website repo) rather than generating new photos -- same
+# background-removed head-and-shoulders crop already used there. Keyed
+# by first name (lowercased) since the agent name field on this tool is
+# just free text, not a structured per-agent config. Only used in Mailer
+# mode's cover letter; a name that doesn't match one of the four falls
+# back to no photo rather than guessing.
+AGENT_PHOTO_DIR = os.path.join(STATIC_DIR, "logo", "agents")
+_AGENT_PHOTO_FILENAMES = {
+    "brian": "agent-brian.png",
+    "justin": "agent-justin.png",
+    "eric": "agent-eric.png",
+    "camille": "agent-camille.png",
+}
+
+
+def _agent_photo_path(agent_name):
+    first = (agent_name or "").strip().split()[0].lower() if (agent_name or "").strip() else ""
+    filename = _AGENT_PHOTO_FILENAMES.get(first)
+    if not filename:
+        return None
+    path = os.path.join(AGENT_PHOTO_DIR, filename)
+    return path if os.path.isfile(path) else None
+
+
+# Personal-site links for the "About your agent" card in Mailer mode --
+# same first-name lookup pattern as the photo above. Only Brian and
+# Justin have a live personal/team site right now; Eric's isn't decided
+# yet and Camille's isn't relevant yet, so both are simply left out
+# rather than guessing at a URL -- the card just omits the website line
+# entirely when there's no entry, rather than showing something wrong.
+_AGENT_WEBSITES = {
+    "brian": "brianelmorehomes.com",
+    "justin": "justinlucasgroup.com",
+}
+
+
+def _agent_website(agent_name):
+    first = (agent_name or "").strip().split()[0].lower() if (agent_name or "").strip() else ""
+    return _AGENT_WEBSITES.get(first)
+
 
 def money(n):
     """None-safe currency formatter -- a field the parser couldn't find
@@ -73,6 +115,8 @@ def render_pear(fields, computed, output_path, agent_name="Brian Elmore", agent_
         logo_jlg=JLG_BLOCK,
         logo_brokerage=BROKERAGE_LOCKUP_BW if print_safe_logo else BROKERAGE_LOCKUP,
         logo_fair_housing=FAIR_HOUSING_BUGS,
+        agent_photo=_agent_photo_path(agent_name),
+        agent_website=_agent_website(agent_name),
         agent_name=agent_name,
         agent_phone=agent_phone,
         agent_email=agent_email or "brian@justinlucasgroup.com",
