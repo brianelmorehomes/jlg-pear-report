@@ -694,7 +694,18 @@ generateBtn.addEventListener('click', () => {
   generateBtn.textContent = 'Generating...';
   fetch('/generate', { method: 'POST', body: form })
     .then(r => {
-      if (!r.ok) return r.json().then(e => { throw new Error(e.error || 'Failed'); });
+      if (!r.ok) return r.text().then(text => {
+        // A killed/timed-out worker (or Render's own gateway) returns an
+        // HTML error page, not the JSON body this code expects -- JSON.parse
+        // on that used to blow up as a cryptic "Unexpected token '<'...
+        // is not valid JSON" alert with no indication of what actually went
+        // wrong. This falls back to a plain-English message instead when
+        // the response isn't JSON at all.
+        let msg = 'Failed (status ' + r.status + ')';
+        try { msg = JSON.parse(text).error || msg; }
+        catch (parseErr) { msg = 'Server error (status ' + r.status + '). This can happen if a batch is too large or the request timed out -- try again, or with fewer files at once.'; }
+        throw new Error(msg);
+      });
       // Pull the real filename (address + client name) out of the
       // Content-Disposition header the server sends -- a blob download
       // via JS ignores that header entirely unless we read it ourselves
@@ -939,7 +950,15 @@ function renderFileList() {
     fileListEl.appendChild(row);
   });
   generateBtn.disabled = selectedFiles.length === 0;
-  statusEl.textContent = selectedFiles.length ? selectedFiles.length + ' file(s) ready.' : '';
+  // Large batches run as one long request on a free-tier server -- a soft
+  // heads-up here, not a hard cap, since 25 is a guess at a safe ceiling,
+  // not a real measured limit. If a big batch times out anyway, splitting
+  // it into two smaller ones is the reliable workaround.
+  if (selectedFiles.length > 25) {
+    statusEl.textContent = selectedFiles.length + ' file(s) ready. Large batches can take a while and are more likely to time out -- if this fails, try splitting it into two smaller batches.';
+  } else {
+    statusEl.textContent = selectedFiles.length ? selectedFiles.length + ' file(s) ready.' : '';
+  }
 }
 
 dz.addEventListener('click', () => fileInput.click());
@@ -971,7 +990,18 @@ generateBtn.addEventListener('click', () => {
 
   fetch('/generate_batch', { method: 'POST', body: form })
     .then(r => {
-      if (!r.ok) return r.json().then(e => { throw new Error(e.error || 'Failed'); });
+      if (!r.ok) return r.text().then(text => {
+        // A killed/timed-out worker (or Render's own gateway) returns an
+        // HTML error page, not the JSON body this code expects -- JSON.parse
+        // on that used to blow up as a cryptic "Unexpected token '<'...
+        // is not valid JSON" alert with no indication of what actually went
+        // wrong. This falls back to a plain-English message instead when
+        // the response isn't JSON at all.
+        let msg = 'Failed (status ' + r.status + ')';
+        try { msg = JSON.parse(text).error || msg; }
+        catch (parseErr) { msg = 'Server error (status ' + r.status + '). This can happen if a batch is too large or the request timed out -- try again, or with fewer files at once.'; }
+        throw new Error(msg);
+      });
       const cd = r.headers.get('Content-Disposition') || '';
       const match = cd.match(/filename="?([^";]+)"?/);
       const filename = match ? match[1] : 'PEAR_Reports_Batch.zip';
@@ -1256,7 +1286,15 @@ function renderFileList() {
     fileListEl.appendChild(row);
   });
   generateBtn.disabled = selectedFiles.length === 0;
-  statusEl.textContent = selectedFiles.length ? selectedFiles.length + ' file(s) ready.' : '';
+  // Large batches run as one long request on a free-tier server -- a soft
+  // heads-up here, not a hard cap, since 25 is a guess at a safe ceiling,
+  // not a real measured limit. If a big batch times out anyway, splitting
+  // it into two smaller ones is the reliable workaround.
+  if (selectedFiles.length > 25) {
+    statusEl.textContent = selectedFiles.length + ' file(s) ready. Large batches can take a while and are more likely to time out -- if this fails, try splitting it into two smaller batches.';
+  } else {
+    statusEl.textContent = selectedFiles.length ? selectedFiles.length + ' file(s) ready.' : '';
+  }
 }
 
 dz.addEventListener('click', () => fileInput.click());
@@ -1290,7 +1328,18 @@ generateBtn.addEventListener('click', () => {
 
   fetch('/generate_mailer', { method: 'POST', body: form })
     .then(r => {
-      if (!r.ok) return r.json().then(e => { throw new Error(e.error || 'Failed'); });
+      if (!r.ok) return r.text().then(text => {
+        // A killed/timed-out worker (or Render's own gateway) returns an
+        // HTML error page, not the JSON body this code expects -- JSON.parse
+        // on that used to blow up as a cryptic "Unexpected token '<'...
+        // is not valid JSON" alert with no indication of what actually went
+        // wrong. This falls back to a plain-English message instead when
+        // the response isn't JSON at all.
+        let msg = 'Failed (status ' + r.status + ')';
+        try { msg = JSON.parse(text).error || msg; }
+        catch (parseErr) { msg = 'Server error (status ' + r.status + '). This can happen if a batch is too large or the request timed out -- try again, or with fewer files at once.'; }
+        throw new Error(msg);
+      });
       const cd = r.headers.get('Content-Disposition') || '';
       const match = cd.match(/filename="?([^";]+)"?/);
       const filename = match ? match[1] : 'PEAR_Mailers_Batch.zip';
