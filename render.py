@@ -50,6 +50,28 @@ def _agent_photo_path(agent_name):
     return path if os.path.isfile(path) else None
 
 
+# Full-torso standing cutout, same asset family as the circular badge
+# above -- used in the letter's lower-right whitespace instead of a
+# small header icon, mirroring the "Spotlight" treatment from the
+# Social Media Post Generator. Camille doesn't have a standing cutout
+# yet (her source headshot is a tight head/shoulders crop), so she
+# simply gets no photo there rather than a stretched or missing image.
+_AGENT_STANDING_FILENAMES = {
+    "brian": "agent-standing-brian.png",
+    "justin": "agent-standing-justin.png",
+    "eric": "agent-standing-eric.png",
+}
+
+
+def _agent_standing_photo_path(agent_name):
+    first = (agent_name or "").strip().split()[0].lower() if (agent_name or "").strip() else ""
+    filename = _AGENT_STANDING_FILENAMES.get(first)
+    if not filename:
+        return None
+    path = os.path.join(AGENT_PHOTO_DIR, filename)
+    return path if os.path.isfile(path) else None
+
+
 # Personal-site links shown in the mailer letter's masthead/footer --
 # same first-name lookup pattern as the photo above. Camille doesn't
 # have a site yet, so she's simply left out rather than guessing at a
@@ -116,6 +138,7 @@ def render_pear(fields, computed, output_path, agent_name="Brian Elmore", agent_
         logo_brokerage=BROKERAGE_LOCKUP_BW if print_safe_logo else BROKERAGE_LOCKUP,
         logo_fair_housing=FAIR_HOUSING_BUGS,
         agent_photo=_agent_photo_path(agent_name),
+        agent_standing_photo=_agent_standing_photo_path(agent_name),
         agent_website=_agent_website(agent_name),
         agent_name=agent_name,
         agent_phone=agent_phone,
