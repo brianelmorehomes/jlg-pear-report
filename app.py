@@ -139,7 +139,7 @@ def _default_fields_from_parsed(data):
 
 DEFAULT_LETTER_BODY = """I hope this note finds you well. I've been keeping an eye on home values in your area, and the numbers for {{property_address}} were worth sharing.
 
-Enclosed is a complimentary Professional Equity Assessment Report I put together for your property. It brings together current automated valuation estimates, your estimated mortgage balance (pulled from public county property records, not any private source), and the equity you've likely built, all in one simple snapshot. There's no cost or obligation attached to it, it's simply information I believe every homeowner should have on hand.
+Enclosed is a complimentary Professional Equity Assessment Report I put together for your property. A quick note on where the numbers come from: the estimated value is simply an average of a few automated valuation models, not a formal appraisal, and the mortgage balance is pulled from public county property records only, so it won't reflect any additional principal payments, refinances, or other private loan details. Think of the whole thing as a helpful, illustrative snapshot of your equity rather than an exact figure. There's no cost or obligation attached to it, it's simply information I believe every homeowner should have on hand.
 
 Whether you're thinking about your next move, curious what your options look like, or just enjoy staying informed, I'm always happy to talk through what any of this means for you. No pressure, no pitch, just reach out whenever it's useful."""
 
