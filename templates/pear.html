@@ -89,7 +89,15 @@ h1, h2, h3 { margin: 0; padding: 0; }
 }
 
 /* ---------- Title block ---------- */
+/* Two columns instead of four stacked lines -- client name on the left,
+   address/facts on the right, sharing the same row instead of running
+   underneath each other. Reclaims roughly two lines of vertical space
+   on the page, which is where a client's actual whitespace complaint
+   was: not enough room between the last section and the footer. */
 .title-block { margin-bottom: 18px; }
+.title-block .title-row { display: flex; justify-content: space-between; align-items: flex-end; gap: 20px; }
+.title-block .title-left { flex: 1 1 auto; min-width: 0; }
+.title-block .title-right { flex: 0 0 auto; max-width: 48%; text-align: right; }
 .title-block .eyebrow {
   font-size: 8pt;
   font-weight: 700;
@@ -107,7 +115,6 @@ h1, h2, h3 { margin: 0; padding: 0; }
 .title-block .subline {
   font-size: 9.6pt;
   color: var(--granite);
-  margin-top: 5px;
 }
 .title-block .facts {
   font-size: 8.4pt;
@@ -227,14 +234,22 @@ h1, h2, h3 { margin: 0; padding: 0; }
 .letter-wrap { padding-bottom: 0.7in; page-break-after: always; }
 /* Sender intro -- lives in the letter's masthead, mirroring how the
    report page uses that same right-hand masthead slot for the "prepared
-   date" meta block. Puts a face to the letter before the recipient even
-   starts reading, instead of down by the signature where a photo reads
-   like it's about to sign the page for you. */
+   date" meta block. Text-only (name + brokerage) -- the actual photo
+   moved down to the standing cutout below, so it isn't duplicated in
+   two places on the same page. */
 .masthead .sender-intro { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
 .masthead .sender-text { flex-shrink: 0; }
-.masthead .sender-photo { width: 34pt; height: 34pt; border-radius: 50%; object-fit: cover; flex-shrink: 0; }
 .masthead .sender-name { font-weight: 700; color: var(--broker-blue); font-size: 9.6pt; text-align: right; white-space: nowrap; }
 .masthead .sender-tagline { font-size: 7.6pt; color: var(--granite); text-align: right; margin-top: 1px; white-space: nowrap; }
+/* Full-torso standing cutout -- the "Spotlight" treatment, filling the
+   large block of empty space a short business letter otherwise leaves
+   below the signature. Plain position:absolute (NOT position:fixed like
+   the footer) so it anchors to this page's own box and does not repeat
+   onto the report page: an absolutely positioned element with no
+   positioned ancestor uses the page it actually falls on as its
+   containing block, it only LOOKS similar to the footer's page-pinning
+   trick. Sized and positioned to clear the footer band underneath it. */
+.letter-standing-photo { position: absolute; bottom: 0.85in; right: -0.1in; width: 2.5in; height: auto; }
 .letter-date { font-size: 9.4pt; color: var(--granite); margin: 40px 0 20px; }
 .letter-address { font-size: 9.6pt; line-height: 1.5; margin-bottom: 20px; }
 .letter-greeting { font-size: 9.6pt; margin-bottom: 12px; }
@@ -287,7 +302,6 @@ h1, h2, h3 { margin: 0; padding: 0; }
         <div class="sender-name">{{ agent_name }}</div>
         <div class="sender-tagline">Justin Lucas Group</div>
       </div>
-      {% if agent_photo %}<img class="sender-photo" src="file://{{ agent_photo }}" alt="{{ agent_name }}">{% endif %}
     </div>
   </div>
 
@@ -307,6 +321,8 @@ h1, h2, h3 { margin: 0; padding: 0; }
     <p>Warm regards,</p>
     <p class="agent-name">{{ agent_name }}</p>
   </div>
+
+  {% if agent_standing_photo %}<img class="letter-standing-photo" src="file://{{ agent_standing_photo }}" alt="{{ agent_name }}">{% endif %}
 </div>
 {% endif %}
 
@@ -324,18 +340,24 @@ h1, h2, h3 { margin: 0; padding: 0; }
 </div>
 
 <div class="title-block">
-  <div class="eyebrow">Prepared exclusively for</div>
-  <h1 class="serif">{{ f.client_name or "Valued Client" }}</h1>
-  <div class="subline">{{ f.full_address or "Property address not provided" }}</div>
-  {% if f.beds or f.baths or f.sqft %}
-  <div class="facts">
-    {%- if f.beds %}{{ f.beds }} Beds{% endif -%}
-    {%- if f.baths %} &middot; {{ f.baths }} Baths{% endif -%}
-    {%- if f.sqft %} &middot; {{ f.sqft }} SF{% endif -%}
-    {%- if f.year_built %} &middot; Built {{ f.year_built }}{% endif -%}
-    {%- if f.property_type %} &middot; {{ f.property_type }}{% endif -%}
+  <div class="title-row">
+    <div class="title-left">
+      <div class="eyebrow">Prepared exclusively for</div>
+      <h1 class="serif">{{ f.client_name or "Valued Client" }}</h1>
+    </div>
+    <div class="title-right">
+      <div class="subline">{{ f.full_address or "Property address not provided" }}</div>
+      {% if f.beds or f.baths or f.sqft %}
+      <div class="facts">
+        {%- if f.beds %}{{ f.beds }} Beds{% endif -%}
+        {%- if f.baths %} &middot; {{ f.baths }} Baths{% endif -%}
+        {%- if f.sqft %} &middot; {{ f.sqft }} SF{% endif -%}
+        {%- if f.year_built %} &middot; Built {{ f.year_built }}{% endif -%}
+        {%- if f.property_type %} &middot; {{ f.property_type }}{% endif -%}
+      </div>
+      {% endif %}
+    </div>
   </div>
-  {% endif %}
 </div>
 
 <!-- SECTION 1: MARKET VALUATION -->
