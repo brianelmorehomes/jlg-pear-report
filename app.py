@@ -1488,6 +1488,12 @@ def generate_batch():
     agent_email = request.form.get("agent_email", "").strip() or "brian@justinlucasgroup.com"
     print_safe_logo = bool(request.form.get("print_safe_logo", "").strip())
 
+    # Timestamp the zip itself (not the individual PDFs inside it) so
+    # re-running the same batch -- tomorrow, or twice in a row -- never
+    # overwrites/collides with an earlier run's download on Brian's
+    # computer. mo.day.year_HH.MM, 24-hour clock, per Brian's convention.
+    run_stamp = datetime.datetime.now().strftime("%m.%d.%Y_%H.%M")
+
     # One PDF per uploaded file, all zipped together for a single
     # download. A single bad file (unreadable PDF, wrong report type,
     # totally unrecognizable format) shouldn't sink the other N-1 that
@@ -1575,7 +1581,7 @@ def generate_batch():
     return send_file(
         zip_buf,
         as_attachment=True,
-        download_name="PEAR_Reports_Batch.zip",
+        download_name=f"PEAR_Reports_Batch_{run_stamp}.zip",
         mimetype="application/zip",
     )
 
@@ -1591,6 +1597,12 @@ def generate_mailer():
     agent_email = request.form.get("agent_email", "").strip() or "brian@justinlucasgroup.com"
     print_safe_logo = bool(request.form.get("print_safe_logo", "").strip())
     letter_template = request.form.get("letter_body", "").strip() or DEFAULT_LETTER_BODY
+
+    # Timestamp the zip itself (not the individual PDFs inside it) so
+    # re-running the same batch/mailer -- tomorrow, or twice in a row --
+    # never overwrites/collides with an earlier run's download on Brian's
+    # computer. mo.day.year_HH.MM, 24-hour clock, per Brian's convention.
+    run_stamp = datetime.datetime.now().strftime("%m.%d.%Y_%H.%M")
 
     # Same no-review, one-try/except-per-file pipeline as plain batch
     # mode, plus a mail-merged cover letter (page 1) ahead of the report
@@ -1693,9 +1705,10 @@ def generate_mailer():
     return send_file(
         zip_buf,
         as_attachment=True,
-        download_name="PEAR_Mailers_Batch.zip",
+        download_name=f"PEAR_Mailers_Batch_{run_stamp}.zip",
         mimetype="application/zip",
     )
+
 
 
 if __name__ == "__main__":
