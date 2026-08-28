@@ -260,6 +260,12 @@ h1, h2, h3 { margin: 0; padding: 0; }
    and the printed name -- kept deliberately plain, no photo here, so
    nothing sits where an actual pen signature is meant to go. */
 .letter-signoff .agent-name { font-weight: 700; color: var(--broker-blue); margin-top: 56px; }
+/* When a scanned pen-signature cutout is available for this agent, it
+   fills that same reserved blank space instead of leaving it empty --
+   so the printed name's margin collapses down to a normal small gap
+   under the image rather than stacking on top of it. */
+.letter-signoff .signature-img { display: block; height: 50px; width: auto; margin: 10px 0 2px -4px; }
+.letter-signoff.has-signature .agent-name { margin-top: 2px; }
 
 /* ---------- Footer ---------- */
 /* A tinted band rather than a plain hairline-topped text row -- gives
@@ -314,11 +320,12 @@ h1, h2, h3 { margin: 0; padding: 0; }
   <div class="letter-body">
     {% for para in letter.paragraphs %}<p>{{ para }}</p>{% endfor %}
   </div>
-  <div class="letter-signoff">
-    <!-- No photo, no repeated contact/brokerage info here -- this is
-         purely the traditional close, kept clear for an actual pen
-         signature between this line and the printed name. -->
+  <div class="letter-signoff{% if agent_signature %} has-signature{% endif %}">
+    <!-- If a scanned signature exists for this agent, it renders between
+         the close and the printed name. Otherwise this stays a plain
+         traditional close, kept clear for an actual pen signature. -->
     <p>Warm regards,</p>
+    {% if agent_signature %}<img class="signature-img" src="file://{{ agent_signature }}" alt="Signature">{% endif %}
     <p class="agent-name">{{ agent_name }}</p>
   </div>
 

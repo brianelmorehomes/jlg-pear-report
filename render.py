@@ -89,6 +89,26 @@ def _agent_website(agent_name):
     return _AGENT_WEBSITES.get(first)
 
 
+# Scanned pen-signature cutout, dropped into the letter's sign-off block
+# between "Warm regards," and the printed name so the mailed letter reads
+# as personally signed rather than left blank for someone to sign by hand.
+# Same first-name lookup pattern as the other agent assets -- only Brian
+# has one so far; anyone else falls back to the original blank space
+# reserved for an actual pen signature.
+_AGENT_SIGNATURE_FILENAMES = {
+    "brian": "signature-brian.png",
+}
+
+
+def _agent_signature_path(agent_name):
+    first = (agent_name or "").strip().split()[0].lower() if (agent_name or "").strip() else ""
+    filename = _AGENT_SIGNATURE_FILENAMES.get(first)
+    if not filename:
+        return None
+    path = os.path.join(AGENT_PHOTO_DIR, filename)
+    return path if os.path.isfile(path) else None
+
+
 def money(n):
     """None-safe currency formatter -- a field the parser couldn't find
     and the agent hasn't filled in yet should render as an em dash, never
@@ -139,6 +159,7 @@ def render_pear(fields, computed, output_path, agent_name="Brian Elmore", agent_
         logo_fair_housing=FAIR_HOUSING_BUGS,
         agent_photo=_agent_photo_path(agent_name),
         agent_standing_photo=_agent_standing_photo_path(agent_name),
+        agent_signature=_agent_signature_path(agent_name),
         agent_website=_agent_website(agent_name),
         agent_name=agent_name,
         agent_phone=agent_phone,
