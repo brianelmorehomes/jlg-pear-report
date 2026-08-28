@@ -1263,7 +1263,7 @@ MAILER_PAGE = """
   <div class="card" id="reviewCard" style="display:none;">
     <h2><span class="step-num">4</span>Review &amp; correct</h2>
     <div class="field helper" style="margin-bottom:14px;">
-      Confirm or correct the owner name and property address pulled from each report before anything gets generated. A name flagged below didn't look reliable enough to print automatically (reversed, missing, or an LLC/trust on title) -- leaving either field blank falls back to "Homeowner" / "Current Homeowner", same as the regular fallback.
+      Confirm or correct the owner name and property address pulled from each report before anything gets generated. Every field below shows exactly what was parsed, even when flagged -- a flagged name just means it didn't look reliable enough to print automatically (reversed, missing, or an LLC/trust on title), so it's worth a judgment call on your end. Leaving either field blank falls back to "Homeowner" / "Current Homeowner", same as the regular fallback.
     </div>
     <div id="reviewList"></div>
     <div id="reviewStatus" style="font-size:.85rem;color:var(--muted);margin-top:6px;"></div>
@@ -1533,7 +1533,7 @@ function showReviewCard(items, parseErrors) {
     if (item.name_needs_review) {
       const warn = document.createElement('div');
       warn.className = 'warn-box';
-      warn.textContent = 'Heads up: the owner name on this record didn\\'t look reliable enough to print automatically -- please confirm or enter it below.';
+      warn.textContent = 'Heads up: the name below is exactly what was parsed, but it didn\\'t look reliable enough to print automatically (reversed, missing, or an LLC/trust on title) -- take a look and correct it if needed.';
       box.appendChild(warn);
     }
 
@@ -2016,7 +2016,12 @@ def mailer_parse():
                 "source_file": original_name,
                 "fields": fields,
                 "computed": computed,
-                "suggested_name": safe_name or "",
+                # Always show the actual parsed name, even when it failed
+                # the automatic reliability check -- the whole point of
+                # this review step is letting Brian look at it and decide
+                # for himself, not hiding it behind a blank field. The
+                # "needs review" flag still drives the warning below it.
+                "suggested_name": owner_name,
                 "name_needs_review": safe_name is None,
                 "parse_warnings": data.get("parse_warnings") or [],
             })
