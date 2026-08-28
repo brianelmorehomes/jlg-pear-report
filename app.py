@@ -11,6 +11,7 @@ Then open: http://localhost:5000
 """
 import datetime
 import io
+import json
 import os
 import re
 import traceback
@@ -286,6 +287,78 @@ def _build_letter(data, fields, letter_template, agent_name):
         "paragraphs": paragraphs,
     }
     return letter, used_fallback
+
+
+def _build_letter_manual(fields, letter_template, agent_name, owner_name):
+    """Same merge logic as _build_letter, but for the small-batch Mailer
+    Review flow (see /mailer_parse + /mailer_review_generate below): the
+    caller supplies an owner name a human has already looked at and typed
+    in themselves, so the automatic entity/trust/reversed-name safety net
+    in _safe_greeting_name() doesn't apply here -- a person confirming or
+    correcting a name IS the safety check. An empty/whitespace-only name
+    still falls back to "Homeowner" as a last resort rather than printing
+    a blank greeting."""
+    owner_name = (owner_name or "").strip() or "Homeowner"
+    address_line1, address_line2 = _split_address_for_letter(fields.get("full_address"))
+    property_address = _format_address_for_display(fields.get("full_address")) or "your property"
+
+    merged = (letter_template or DEFAULT_LETTER_BODY)
+    merged = merged.replace("{{owner_name}}", owner_name)
+    merged = merged.replace("{{property_address}}", property_address)
+    merged = merged.replace("{{agent_name}}", agent_name or "Brian Elmore")
+    paragraphs = [p.strip() for p in re.split(r"\n\s*\n", merged) if p.strip()]
+
+    return {
+        "date": datetime.date.today().strftime("%B %-d, %Y"),
+        "recipient_name": owner_name,
+        "address_line1": address_line1,
+        "address_line2": address_line2,
+        "greeting": _first_names_only(owner_name),
+        "paragraphs": paragraphs,
+    }
+
+
+# ---------------------------------------------------------------------
+# Mailer Review mode: a middle ground between the no-review batch/mailer
+# pipeline above and the fully manual single-report flow. For a small
+# handful of properties (capped at 5 -- this is deliberately NOT meant to
+# scale to a real batch) where the parsed owner name is ambiguous, wrong,
+# or just worth double-checking before something goes in the mail, this
+# lets Brian glance at (and correct) the owner name and property address
+# for each file before any PDF gets generated. Two-step/two-request flow
+# because the browser needs a place to hold the edits between "parse" and
+# "generate" -- the parsed fields for the batch are stashed server-side
+# in a small JSON file (keyed by a random batch id) rather than an
+# in-memory dict, since Render's gunicorn config runs 2 worker processes
+# and the follow-up request has no guarantee of landing on the same one.
+# ---------------------------------------------------------------------
+
+REVIEW_BATCH_MAX_FILES = 5
+
+
+def _review_batch_path(batch_id):
+    safe_id = re.sub(r"[^a-f0-9]", "", (batch_id or "").lower())
+    return os.path.join(OUTPUT_DIR, f"mailer_review_{safe_id}.json") if safe_id else None
+
+
+def _cleanup_stale_review_batches(max_age_hours=24):
+    """Best-effort housekeeping: a review batch that's parsed but never
+    finished (Brian closes the tab, or just changes his mind) leaves a
+    small JSON file behind in OUTPUT_DIR. Sweeps those older than a day
+    every time a new review batch is started, so they don't quietly pile
+    up on the container's disk."""
+    cutoff = datetime.datetime.now().timestamp() - max_age_hours * 3600
+    try:
+        for name in os.listdir(OUTPUT_DIR):
+            if name.startswith("mailer_review_") and name.endswith(".json"):
+                path = os.path.join(OUTPUT_DIR, name)
+                try:
+                    if os.path.getmtime(path) < cutoff:
+                        os.remove(path)
+                except OSError:
+                    pass
+    except OSError:
+        pass
 
 
 PAGE = """
@@ -1096,6 +1169,10 @@ MAILER_PAGE = """
   .file-row button { background:none; border:none; color:var(--red); cursor:pointer; font-size:.8rem; font-weight:700; padding:2px 6px; flex-shrink:0; }
   .merge-tags { background: var(--slate); border-radius: var(--r); padding: 10px 12px; font-size: .78rem; color: var(--text); margin-bottom: 12px; }
   .merge-tags code { background:#fff; border:1px solid var(--border); border-radius:3px; padding:1px 5px; font-size:.76rem; color:var(--blue); }
+  .warn-box { background: #fff7ed; border: 1px solid #f0c98a; border-radius: var(--r); padding: 10px 12px; font-size: .8rem; color: #7a5200; margin-bottom: 12px; }
+  .review-item { border: 1px solid var(--border); border-radius: var(--rl); padding: 16px; margin-bottom: 12px; }
+  .review-item .fname { font-size: .78rem; font-weight: 700; color: var(--blue); margin-bottom: 10px; overflow-wrap: anywhere; }
+  .review-note { font-size: .76rem; color: var(--muted); margin-top: 6px; }
   .build-credit { text-align: center; margin-top: 32px; padding-top: 20px; border-top: 1px solid var(--border); font-size: .74rem; color: var(--muted); }
   .mode-tabs { max-width: 760px; margin: 0 auto; padding: 18px 24px 0; display: flex; gap: 8px; }
   .mode-tab { flex: 1; text-align: center; padding: 10px 14px; border-radius: var(--r); background: #fff; border: 1.5px solid var(--border-b); color: var(--blue); font-size: .82rem; font-weight: 700; text-decoration: none; transition: background var(--d) var(--ease), color var(--d) var(--ease); }
@@ -1164,7 +1241,7 @@ MAILER_PAGE = """
     <textarea id="defaultLetterBody" style="display:none;">{{ default_letter }}</textarea>
   </div>
 
-  <div class="card">
+  <div class="card" id="uploadCard">
     <h2><span class="step-num">3</span>Upload Remine reports</h2>
     <div class="field helper" style="margin-bottom:14px;">
       Each report auto-fills the same way batch mode does: value defaults to the average of the 3 AVMs, mortgage balance and owner name come straight from the parsed record, and the move-up target price defaults to ~25% above value. None of that is editable per file here -- only the cover letter above, which applies to the whole batch.
@@ -1175,8 +1252,25 @@ MAILER_PAGE = """
       <input type="file" id="fileInput" accept="application/pdf" multiple>
     </div>
     <div id="fileList" style="margin-top:14px;"></div>
+    <label style="display:flex;align-items:center;gap:7px;margin:12px 0 4px;font-size:.82rem;color:var(--text);cursor:pointer;">
+      <input type="checkbox" id="reviewMode" style="margin:0;">
+      Review &amp; correct owner name/address before generating (up to {{ review_max }} files)
+    </label>
     <div id="status"></div>
     <button class="primary" id="generateBtn" disabled>Generate all mailers</button>
+  </div>
+
+  <div class="card" id="reviewCard" style="display:none;">
+    <h2><span class="step-num">4</span>Review &amp; correct</h2>
+    <div class="field helper" style="margin-bottom:14px;">
+      Confirm or correct the owner name and property address pulled from each report before anything gets generated. A name flagged below didn't look reliable enough to print automatically (reversed, missing, or an LLC/trust on title) -- leaving either field blank falls back to "Homeowner" / "Current Homeowner", same as the regular fallback.
+    </div>
+    <div id="reviewList"></div>
+    <div id="reviewStatus" style="font-size:.85rem;color:var(--muted);margin-top:6px;"></div>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;">
+      <button class="secondary" id="reviewBackBtn" type="button">Back</button>
+      <button class="primary" id="reviewGenerateBtn" type="button" style="margin-top:0;">Generate reviewed mailers</button>
+    </div>
   </div>
 
   <p class="build-credit">&copy; 2026 Brian Elmore. All rights reserved. This tool may not be reproduced or redistributed without permission.</p>
@@ -1252,8 +1346,17 @@ const fileInput = document.getElementById('fileInput');
 const fileListEl = document.getElementById('fileList');
 const statusEl = document.getElementById('status');
 const generateBtn = document.getElementById('generateBtn');
+const reviewModeEl = document.getElementById('reviewMode');
+const uploadCard = document.getElementById('uploadCard');
+const reviewCard = document.getElementById('reviewCard');
+const reviewListEl = document.getElementById('reviewList');
+const reviewStatusEl = document.getElementById('reviewStatus');
+const reviewBackBtn = document.getElementById('reviewBackBtn');
+const reviewGenerateBtn = document.getElementById('reviewGenerateBtn');
+const REVIEW_MAX_FILES = {{ review_max }};
 
 let selectedFiles = [];
+let currentBatchId = null;
 
 function fileKey(f) { return f.name + '::' + f.size; }
 
@@ -1285,17 +1388,28 @@ function renderFileList() {
     row.appendChild(btn);
     fileListEl.appendChild(row);
   });
-  generateBtn.disabled = selectedFiles.length === 0;
-  // Large batches run as one long request on a free-tier server -- a soft
-  // heads-up here, not a hard cap, since 25 is a guess at a safe ceiling,
-  // not a real measured limit. If a big batch times out anyway, splitting
-  // it into two smaller ones is the reliable workaround.
-  if (selectedFiles.length > 25) {
+
+  const reviewOn = reviewModeEl.checked;
+  const tooManyForReview = reviewOn && selectedFiles.length > REVIEW_MAX_FILES;
+  generateBtn.disabled = selectedFiles.length === 0 || tooManyForReview;
+  generateBtn.textContent = reviewOn ? 'Review names & generate' : 'Generate all mailers';
+
+  if (tooManyForReview) {
+    statusEl.textContent = 'Review mode supports up to ' + REVIEW_MAX_FILES + ' files at a time -- uncheck review, or trim your selection to ' + REVIEW_MAX_FILES + ' or fewer.';
+  } else if (reviewOn) {
+    statusEl.textContent = selectedFiles.length ? selectedFiles.length + ' file(s) ready for review.' : '';
+  } else if (selectedFiles.length > 25) {
+    // Large batches run as one long request on a free-tier server -- a soft
+    // heads-up here, not a hard cap, since 25 is a guess at a safe ceiling,
+    // not a real measured limit. If a big batch times out anyway, splitting
+    // it into two smaller ones is the reliable workaround.
     statusEl.textContent = selectedFiles.length + ' file(s) ready. Large batches can take a while and are more likely to time out -- if this fails, try splitting it into two smaller batches.';
   } else {
     statusEl.textContent = selectedFiles.length ? selectedFiles.length + ' file(s) ready.' : '';
   }
 }
+
+reviewModeEl.addEventListener('change', renderFileList);
 
 dz.addEventListener('click', () => fileInput.click());
 dz.addEventListener('dragover', e => { e.preventDefault(); dz.classList.add('drag'); });
@@ -1309,24 +1423,12 @@ fileInput.addEventListener('change', () => {
   fileInput.value = '';
 });
 
-generateBtn.addEventListener('click', () => {
-  saveAgentSettings();
-  saveLetter();
-  if (!selectedFiles.length) return;
-
-  const form = new FormData();
-  form.append('agent_name', document.getElementById('agentName').value);
-  form.append('agent_phone', document.getElementById('agentPhone').value);
-  form.append('agent_email', document.getElementById('agentEmail').value);
-  form.append('print_safe_logo', document.getElementById('printSafeLogo').checked ? '1' : '');
-  form.append('letter_body', letterEl.value);
-  selectedFiles.forEach(f => form.append('files', f));
-
-  generateBtn.disabled = true;
-  generateBtn.textContent = 'Generating ' + selectedFiles.length + ' mailer(s)...';
-  statusEl.textContent = 'This can take a little while for a large batch -- please leave this tab open.';
-
-  fetch('/generate_mailer', { method: 'POST', body: form })
+// Shared response handling for both the instant (no-review) generate call
+// and the reviewed-batch generate call below -- same zip-or-friendly-error
+// logic either way, just parameterized by which button/status/filename to
+// use so it isn't duplicated twice.
+function handleZipResponse(fetchPromise, defaultFilename, btnEl, btnDefaultText, statusTargetEl, doneMessage) {
+  return fetchPromise
     .then(r => {
       if (!r.ok) return r.text().then(text => {
         // A killed/timed-out worker (or Render's own gateway) returns an
@@ -1342,7 +1444,7 @@ generateBtn.addEventListener('click', () => {
       });
       const cd = r.headers.get('Content-Disposition') || '';
       const match = cd.match(/filename="?([^";]+)"?/);
-      const filename = match ? match[1] : 'PEAR_Mailers_Batch.zip';
+      const filename = match ? match[1] : defaultFilename;
       return r.blob().then(blob => ({ blob, filename }));
     })
     .then(({ blob, filename }) => {
@@ -1353,16 +1455,188 @@ generateBtn.addEventListener('click', () => {
       document.body.appendChild(a);
       a.click();
       a.remove();
-      statusEl.textContent = 'Done -- check the zip\\'s _batch_summary.txt for any fallback greetings, warnings, or files that failed to parse.';
-      generateBtn.disabled = false;
-      generateBtn.textContent = 'Generate all mailers';
+      statusTargetEl.textContent = doneMessage;
+      btnEl.disabled = false;
+      btnEl.textContent = btnDefaultText;
     })
     .catch(err => {
       alert('Error: ' + err.message);
-      statusEl.textContent = '';
-      generateBtn.disabled = false;
-      generateBtn.textContent = 'Generate all mailers';
+      statusTargetEl.textContent = '';
+      btnEl.disabled = false;
+      btnEl.textContent = btnDefaultText;
     });
+}
+
+function startDirectGenerate() {
+  const form = new FormData();
+  form.append('agent_name', document.getElementById('agentName').value);
+  form.append('agent_phone', document.getElementById('agentPhone').value);
+  form.append('agent_email', document.getElementById('agentEmail').value);
+  form.append('print_safe_logo', document.getElementById('printSafeLogo').checked ? '1' : '');
+  form.append('letter_body', letterEl.value);
+  selectedFiles.forEach(f => form.append('files', f));
+
+  generateBtn.disabled = true;
+  const btnLabel = 'Generate all mailers';
+  generateBtn.textContent = 'Generating ' + selectedFiles.length + ' mailer(s)...';
+  statusEl.textContent = 'This can take a little while for a large batch -- please leave this tab open.';
+
+  handleZipResponse(
+    fetch('/generate_mailer', { method: 'POST', body: form }),
+    'PEAR_Mailers_Batch.zip', generateBtn, btnLabel, statusEl,
+    'Done -- check the zip\\'s _batch_summary.txt for any fallback greetings, warnings, or files that failed to parse.'
+  );
+}
+
+function startReview() {
+  const form = new FormData();
+  selectedFiles.forEach(f => form.append('files', f));
+
+  generateBtn.disabled = true;
+  generateBtn.textContent = 'Parsing for review...';
+  statusEl.textContent = '';
+
+  fetch('/mailer_parse', { method: 'POST', body: form })
+    .then(r => r.text().then(text => {
+      let json = null;
+      try { json = JSON.parse(text); } catch (e) { /* fall through to error below */ }
+      if (!r.ok || !json) {
+        throw new Error((json && json.error) || 'Server error (status ' + r.status + ') while parsing for review.');
+      }
+      return json;
+    }))
+    .then(json => {
+      currentBatchId = json.batch_id;
+      showReviewCard(json.items, json.errors || []);
+      generateBtn.disabled = false;
+      generateBtn.textContent = 'Review names & generate';
+      statusEl.textContent = '';
+    })
+    .catch(err => {
+      alert('Error: ' + err.message);
+      generateBtn.disabled = false;
+      generateBtn.textContent = 'Review names & generate';
+    });
+}
+
+function showReviewCard(items, parseErrors) {
+  reviewListEl.innerHTML = '';
+  items.forEach((item, i) => {
+    const box = document.createElement('div');
+    box.className = 'review-item';
+
+    const fname = document.createElement('div');
+    fname.className = 'fname';
+    fname.textContent = item.source_file;
+    box.appendChild(fname);
+
+    if (item.name_needs_review) {
+      const warn = document.createElement('div');
+      warn.className = 'warn-box';
+      warn.textContent = 'Heads up: the owner name on this record didn\\'t look reliable enough to print automatically -- please confirm or enter it below.';
+      box.appendChild(warn);
+    }
+
+    const row = document.createElement('div');
+    row.className = 'row';
+
+    const nameField = document.createElement('div');
+    nameField.className = 'field';
+    const nameLabel = document.createElement('label');
+    nameLabel.textContent = 'Owner / client name';
+    const nameInput = document.createElement('input');
+    nameInput.type = 'text';
+    nameInput.className = 'review-name';
+    nameInput.placeholder = 'Homeowner';
+    nameInput.value = item.suggested_name || '';
+    nameField.appendChild(nameLabel);
+    nameField.appendChild(nameInput);
+
+    const addrField = document.createElement('div');
+    addrField.className = 'field';
+    const addrLabel = document.createElement('label');
+    addrLabel.textContent = 'Property address';
+    const addrInput = document.createElement('input');
+    addrInput.type = 'text';
+    addrInput.className = 'review-address';
+    addrInput.value = (item.fields && item.fields.full_address) || '';
+    addrField.appendChild(addrLabel);
+    addrField.appendChild(addrInput);
+
+    row.appendChild(nameField);
+    row.appendChild(addrField);
+    box.appendChild(row);
+
+    if (item.parse_warnings && item.parse_warnings.length) {
+      const note = document.createElement('div');
+      note.className = 'review-note';
+      note.textContent = item.parse_warnings.map(w => 'Heads up: ' + w).join(' ');
+      box.appendChild(note);
+    }
+
+    reviewListEl.appendChild(box);
+  });
+
+  if (parseErrors.length) {
+    const errBox = document.createElement('div');
+    errBox.className = 'warn-box';
+    errBox.textContent = parseErrors.length + ' file(s) failed to parse and were skipped: ' + parseErrors.map(e => e.source_file).join(', ');
+    reviewListEl.appendChild(errBox);
+  }
+
+  reviewStatusEl.textContent = '';
+  uploadCard.style.display = 'none';
+  reviewCard.style.display = 'block';
+  reviewCard.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+reviewBackBtn.addEventListener('click', () => {
+  currentBatchId = null;
+  reviewCard.style.display = 'none';
+  uploadCard.style.display = 'block';
+});
+
+reviewGenerateBtn.addEventListener('click', () => {
+  if (!currentBatchId) return;
+  const edits = Array.from(reviewListEl.querySelectorAll('.review-item')).map(box => ({
+    client_name: box.querySelector('.review-name').value,
+    full_address: box.querySelector('.review-address').value,
+  }));
+
+  const payload = {
+    batch_id: currentBatchId,
+    items: edits,
+    agent_name: document.getElementById('agentName').value,
+    agent_phone: document.getElementById('agentPhone').value,
+    agent_email: document.getElementById('agentEmail').value,
+    print_safe_logo: document.getElementById('printSafeLogo').checked,
+    letter_body: letterEl.value,
+  };
+
+  reviewGenerateBtn.disabled = true;
+  const btnLabel = 'Generate reviewed mailers';
+  reviewGenerateBtn.textContent = 'Generating ' + edits.length + ' mailer(s)...';
+
+  handleZipResponse(
+    fetch('/mailer_review_generate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }),
+    'PEAR_Mailers_Reviewed.zip', reviewGenerateBtn, btnLabel, reviewStatusEl,
+    'Done.'
+  ).then(() => { currentBatchId = null; });
+});
+
+generateBtn.addEventListener('click', () => {
+  saveAgentSettings();
+  saveLetter();
+  if (!selectedFiles.length) return;
+  if (reviewModeEl.checked) {
+    startReview();
+  } else {
+    startDirectGenerate();
+  }
 });
 </script>
 </body>
@@ -1382,7 +1656,10 @@ def batch_page():
 
 @app.route("/mailer")
 def mailer_page():
-    return render_template_string(MAILER_PAGE, cfg=DEFAULT_AGENT, default_letter=DEFAULT_LETTER_BODY)
+    return render_template_string(
+        MAILER_PAGE, cfg=DEFAULT_AGENT, default_letter=DEFAULT_LETTER_BODY,
+        review_max=REVIEW_BATCH_MAX_FILES,
+    )
 
 
 @app.route("/parse", methods=["POST"])
@@ -1709,6 +1986,160 @@ def generate_mailer():
         mimetype="application/zip",
     )
 
+
+@app.route("/mailer_parse", methods=["POST"])
+def mailer_parse():
+    """Step 1 of Mailer Review mode: parse up to 5 files (no PDFs are
+    generated yet) and hand back each one's default fields plus a
+    suggested owner name, so the browser can show an editable review
+    list before anything gets rendered."""
+    files = request.files.getlist("files")
+    if not files:
+        return jsonify({"error": "No files uploaded"}), 400
+    if len(files) > REVIEW_BATCH_MAX_FILES:
+        return jsonify({
+            "error": f"Review mode supports up to {REVIEW_BATCH_MAX_FILES} files at a time. "
+                     "Uncheck review mode to generate a larger batch without per-file review, "
+                     "or trim your selection."
+        }), 400
+
+    items = []
+    errors = []
+    for f in files:
+        original_name = f.filename or "report.pdf"
+        try:
+            data = detect_and_parse(f.read(), original_name)
+            fields, computed = _default_fields_from_parsed(data)
+            owner_name = data.get("owner_names_display") or ""
+            safe_name = _safe_greeting_name(owner_name, data.get("owner_names_raw"))
+            items.append({
+                "source_file": original_name,
+                "fields": fields,
+                "computed": computed,
+                "suggested_name": safe_name or "",
+                "name_needs_review": safe_name is None,
+                "parse_warnings": data.get("parse_warnings") or [],
+            })
+        except Exception as e:
+            traceback.print_exc()
+            errors.append({"source_file": original_name, "error": str(e)})
+
+    if not items:
+        return jsonify({"error": "None of the uploaded files could be parsed.", "details": errors}), 400
+
+    _cleanup_stale_review_batches()
+    batch_id = uuid.uuid4().hex
+    batch_path = _review_batch_path(batch_id)
+    with open(batch_path, "w") as bf:
+        json.dump(items, bf)
+
+    return jsonify({"batch_id": batch_id, "items": items, "errors": errors})
+
+
+@app.route("/mailer_review_generate", methods=["POST"])
+def mailer_review_generate():
+    """Step 2 of Mailer Review mode: takes the batch id from /mailer_parse
+    plus the (possibly corrected) name/address for each item and actually
+    generates the letter+report PDFs. Unlike the regular mailer pipeline,
+    the greeting/inside-address name here comes directly from what was
+    typed in the review step -- no automatic fallback logic runs, because
+    a human already looked at it."""
+    payload = request.get_json(silent=True) or {}
+    batch_id = payload.get("batch_id")
+    edits = payload.get("items") or []
+    agent_name = (payload.get("agent_name") or "").strip() or "Brian Elmore"
+    agent_phone = (payload.get("agent_phone") or "").strip()
+    agent_email = (payload.get("agent_email") or "").strip() or "brian@justinlucasgroup.com"
+    print_safe_logo = bool(payload.get("print_safe_logo"))
+    letter_template = (payload.get("letter_body") or "").strip() or DEFAULT_LETTER_BODY
+
+    batch_path = _review_batch_path(batch_id)
+    if not batch_path or not os.path.isfile(batch_path):
+        return jsonify({"error": "This review session has expired or was already used -- please re-upload and review again."}), 400
+
+    with open(batch_path) as bf:
+        items = json.load(bf)
+    try:
+        os.remove(batch_path)
+    except OSError:
+        pass
+
+    if not isinstance(edits, list) or len(edits) != len(items):
+        return jsonify({"error": "Edited fields don't match the reviewed files -- please re-upload and review again."}), 400
+
+    run_stamp = datetime.datetime.now().strftime("%m.%d.%Y_%H.%M")
+    results = []
+    zip_buf = io.BytesIO()
+    with zipfile.ZipFile(zip_buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        used_names = set()
+        for item, edit in zip(items, edits):
+            source_file = item.get("source_file")
+            try:
+                fields = dict(item["fields"])
+                computed = item["computed"]
+
+                edited_name = ((edit or {}).get("client_name") or "").strip()
+                edited_address = ((edit or {}).get("full_address") or "").strip()
+                if edited_address:
+                    fields["full_address"] = edited_address
+
+                greeting_name = edited_name or "Homeowner"
+                fields["client_name"] = edited_name or "Current Homeowner"
+
+                letter = _build_letter_manual(fields, letter_template, agent_name, greeting_name)
+
+                out_name = f"PEAR_{uuid.uuid4().hex[:8]}.pdf"
+                out_path = os.path.join(OUTPUT_DIR, out_name)
+                render_pear(
+                    fields, computed, out_path,
+                    agent_name=agent_name, agent_phone=agent_phone, agent_email=agent_email,
+                    print_safe_logo=print_safe_logo, letter=letter,
+                )
+
+                safe_address = _safe_filename_part(fields["full_address"], "Property")
+                safe_client = _safe_filename_part(fields["client_name"], "Client")
+                pdf_name = f"PEAR_Mailer_{safe_address}_{safe_client}.pdf"
+                base_name = pdf_name[:-4]
+                n = 2
+                while pdf_name in used_names:
+                    pdf_name = f"{base_name}_{n}.pdf"
+                    n += 1
+                used_names.add(pdf_name)
+
+                with open(out_path, "rb") as pf:
+                    zf.writestr(pdf_name, pf.read())
+                try:
+                    os.remove(out_path)
+                except OSError:
+                    pass
+
+                results.append({"source_file": source_file, "output_file": pdf_name, "status": "Generated"})
+            except Exception as e:
+                traceback.print_exc()
+                results.append({"source_file": source_file, "output_file": None, "status": f"FAILED to generate: {e}"})
+
+        summary_lines = [
+            "PEAR Mailer Batch (Reviewed) -- Summary",
+            f"{len(results)} file(s) processed, {sum(1 for r in results if r['output_file'])} PDF(s) generated.",
+            "",
+            "Owner name and property address for each file were confirmed/corrected",
+            "by hand before generating -- everything else (value, loan balance, target",
+            "price) still used the same defaults as batch mode.",
+            "",
+        ]
+        for r in results:
+            summary_lines.append(f"- {r['source_file']}  ->  {r['output_file'] or '(not generated)'}")
+            summary_lines.append(f"    Status: {r['status']}")
+            summary_lines.append("")
+        zf.writestr("_batch_summary.txt", "\n".join(summary_lines))
+
+    zip_buf.seek(0)
+    return send_file(
+        zip_buf,
+        as_attachment=True,
+        download_name=f"PEAR_Mailers_Reviewed_{run_stamp}.zip",
+        mimetype="application/zip",
+    )
 
 
 if __name__ == "__main__":
