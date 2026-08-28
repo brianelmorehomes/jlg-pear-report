@@ -257,47 +257,17 @@ def _format_address_for_display(full_address):
     return f"{street.strip().title()} {city.strip().title()}, {state} {zip_code}"
 
 
-def _build_letter(data, fields, letter_template, agent_name):
+def _build_letter(fields, letter_template, agent_name, owner_name):
     """Builds the `letter` dict render_pear()/pear.html expects, for one
     property, by mail-merging letter_template (the shared, agent-edited
-    text from the Mailer mode textarea) against this property's parsed
-    data. Returns (letter_dict, used_fallback_greeting: bool) so the
-    calling route can flag which properties got the generic greeting in
-    the batch summary."""
-    owner_name = data.get("owner_names_display") or ""
-    safe_name = _safe_greeting_name(owner_name, data.get("owner_names_raw"))
-    used_fallback = safe_name is None
-    greeting_name = safe_name or "Homeowner"
-
-    address_line1, address_line2 = _split_address_for_letter(fields.get("full_address"))
-    property_address = _format_address_for_display(fields.get("full_address")) or "your property"
-
-    merged = (letter_template or DEFAULT_LETTER_BODY)
-    merged = merged.replace("{{owner_name}}", greeting_name)
-    merged = merged.replace("{{property_address}}", property_address)
-    merged = merged.replace("{{agent_name}}", agent_name or "Brian Elmore")
-    paragraphs = [p.strip() for p in re.split(r"\n\s*\n", merged) if p.strip()]
-
-    letter = {
-        "date": datetime.date.today().strftime("%B %-d, %Y"),
-        "recipient_name": greeting_name if used_fallback else owner_name or greeting_name,
-        "address_line1": address_line1,
-        "address_line2": address_line2,
-        "greeting": _first_names_only(greeting_name),
-        "paragraphs": paragraphs,
-    }
-    return letter, used_fallback
-
-
-def _build_letter_manual(fields, letter_template, agent_name, owner_name):
-    """Same merge logic as _build_letter, but for the small-batch Mailer
-    Review flow (see /mailer_parse + /mailer_review_generate below): the
-    caller supplies an owner name a human has already looked at and typed
-    in themselves, so the automatic entity/trust/reversed-name safety net
-    in _safe_greeting_name() doesn't apply here -- a person confirming or
-    correcting a name IS the safety check. An empty/whitespace-only name
-    still falls back to "Homeowner" as a last resort rather than printing
-    a blank greeting."""
+    text from the Mailer mode textarea) against this property's fields.
+    Mailer mode always runs through the review step (see /mailer_parse +
+    /mailer_review_generate below) before this is called, so owner_name
+    here is always something a human already looked at and confirmed or
+    typed in themselves -- there's no separate automatic entity/trust/
+    reversed-name safety-net path anymore; a person reviewing the name IS
+    the safety check. An empty/whitespace-only name still falls back to
+    "Homeowner" as a last resort rather than printing a blank greeting."""
     owner_name = (owner_name or "").strip() or "Homeowner"
     address_line1, address_line2 = _split_address_for_letter(fields.get("full_address"))
     property_address = _format_address_for_display(fields.get("full_address")) or "your property"
@@ -319,22 +289,17 @@ def _build_letter_manual(fields, letter_template, agent_name, owner_name):
 
 
 # ---------------------------------------------------------------------
-# Mailer Review mode: a middle ground between the no-review batch/mailer
-# pipeline above and the fully manual single-report flow. For a small
-# handful of properties (capped at 5 -- this is deliberately NOT meant to
-# scale to a real batch) where the parsed owner name is ambiguous, wrong,
-# or just worth double-checking before something goes in the mail, this
-# lets Brian glance at (and correct) the owner name and property address
-# for each file before any PDF gets generated. Two-step/two-request flow
+# Mailer mode: review-then-generate, for any number of files. Before any
+# PDF gets generated, Brian glances at (and corrects) the owner name and
+# property address for every file -- there's no separate no-review path
+# anymore, since in practice it makes sense to review a batch in bulk
+# before producing a pile of PDFs anyway. Two-step/two-request flow
 # because the browser needs a place to hold the edits between "parse" and
 # "generate" -- the parsed fields for the batch are stashed server-side
 # in a small JSON file (keyed by a random batch id) rather than an
 # in-memory dict, since Render's gunicorn config runs 2 worker processes
 # and the follow-up request has no guarantee of landing on the same one.
 # ---------------------------------------------------------------------
-
-REVIEW_BATCH_MAX_FILES = 5
-
 
 def _review_batch_path(batch_id):
     safe_id = re.sub(r"[^a-f0-9]", "", (batch_id or "").lower())
@@ -1244,7 +1209,7 @@ MAILER_PAGE = """
   <div class="card" id="uploadCard">
     <h2><span class="step-num">3</span>Upload Remine reports</h2>
     <div class="field helper" style="margin-bottom:14px;">
-      Each report auto-fills the same way batch mode does: value defaults to the average of the 3 AVMs, mortgage balance and owner name come straight from the parsed record, and the move-up target price defaults to ~25% above value. None of that is editable per file here -- only the cover letter above, which applies to the whole batch.
+      Each report auto-fills the same way batch mode does: value defaults to the average of the 3 AVMs, mortgage balance comes straight from the parsed record, and the move-up target price defaults to ~25% above value. Next you'll get a chance to confirm or correct the owner name and property address for each one before anything gets generated.
     </div>
     <div id="dropzone">
       <p><strong>Drag &amp; drop multiple Remine PDFs here</strong></p>
@@ -1252,12 +1217,8 @@ MAILER_PAGE = """
       <input type="file" id="fileInput" accept="application/pdf" multiple>
     </div>
     <div id="fileList" style="margin-top:14px;"></div>
-    <label style="display:flex;align-items:center;gap:7px;margin:12px 0 4px;font-size:.82rem;color:var(--text);cursor:pointer;">
-      <input type="checkbox" id="reviewMode" style="margin:0;">
-      Review &amp; correct owner name/address before generating (up to {{ review_max }} files)
-    </label>
     <div id="status"></div>
-    <button class="primary" id="generateBtn" disabled>Generate all mailers</button>
+    <button class="primary" id="generateBtn" disabled>Review names &amp; generate</button>
   </div>
 
   <div class="card" id="reviewCard" style="display:none;">
@@ -1346,14 +1307,12 @@ const fileInput = document.getElementById('fileInput');
 const fileListEl = document.getElementById('fileList');
 const statusEl = document.getElementById('status');
 const generateBtn = document.getElementById('generateBtn');
-const reviewModeEl = document.getElementById('reviewMode');
 const uploadCard = document.getElementById('uploadCard');
 const reviewCard = document.getElementById('reviewCard');
 const reviewListEl = document.getElementById('reviewList');
 const reviewStatusEl = document.getElementById('reviewStatus');
 const reviewBackBtn = document.getElementById('reviewBackBtn');
 const reviewGenerateBtn = document.getElementById('reviewGenerateBtn');
-const REVIEW_MAX_FILES = {{ review_max }};
 
 let selectedFiles = [];
 let currentBatchId = null;
@@ -1389,27 +1348,20 @@ function renderFileList() {
     fileListEl.appendChild(row);
   });
 
-  const reviewOn = reviewModeEl.checked;
-  const tooManyForReview = reviewOn && selectedFiles.length > REVIEW_MAX_FILES;
-  generateBtn.disabled = selectedFiles.length === 0 || tooManyForReview;
-  generateBtn.textContent = reviewOn ? 'Review names & generate' : 'Generate all mailers';
+  generateBtn.disabled = selectedFiles.length === 0;
 
-  if (tooManyForReview) {
-    statusEl.textContent = 'Review mode supports up to ' + REVIEW_MAX_FILES + ' files at a time -- uncheck review, or trim your selection to ' + REVIEW_MAX_FILES + ' or fewer.';
-  } else if (reviewOn) {
-    statusEl.textContent = selectedFiles.length ? selectedFiles.length + ' file(s) ready for review.' : '';
-  } else if (selectedFiles.length > 25) {
+  if (selectedFiles.length > 25) {
     // Large batches run as one long request on a free-tier server -- a soft
     // heads-up here, not a hard cap, since 25 is a guess at a safe ceiling,
     // not a real measured limit. If a big batch times out anyway, splitting
-    // it into two smaller ones is the reliable workaround.
-    statusEl.textContent = selectedFiles.length + ' file(s) ready. Large batches can take a while and are more likely to time out -- if this fails, try splitting it into two smaller batches.';
+    // it into two smaller ones is the reliable workaround. (This warning is
+    // about the final generate step -- the review step itself, right after
+    // this, is just a fast text parse and handles any number of files fine.)
+    statusEl.textContent = selectedFiles.length + ' file(s) ready for review. Large batches can take a while to generate afterward and are more likely to time out -- if that happens, try splitting it into two smaller batches.';
   } else {
-    statusEl.textContent = selectedFiles.length ? selectedFiles.length + ' file(s) ready.' : '';
+    statusEl.textContent = selectedFiles.length ? selectedFiles.length + ' file(s) ready for review.' : '';
   }
 }
-
-reviewModeEl.addEventListener('change', renderFileList);
 
 dz.addEventListener('click', () => fileInput.click());
 dz.addEventListener('dragover', e => { e.preventDefault(); dz.classList.add('drag'); });
@@ -1423,10 +1375,9 @@ fileInput.addEventListener('change', () => {
   fileInput.value = '';
 });
 
-// Shared response handling for both the instant (no-review) generate call
-// and the reviewed-batch generate call below -- same zip-or-friendly-error
-// logic either way, just parameterized by which button/status/filename to
-// use so it isn't duplicated twice.
+// Shared response handling for the reviewed-batch generate call below --
+// factored out mainly so the zip-or-friendly-error logic only needs to be
+// written once.
 function handleZipResponse(fetchPromise, defaultFilename, btnEl, btnDefaultText, statusTargetEl, doneMessage) {
   return fetchPromise
     .then(r => {
@@ -1465,27 +1416,6 @@ function handleZipResponse(fetchPromise, defaultFilename, btnEl, btnDefaultText,
       btnEl.disabled = false;
       btnEl.textContent = btnDefaultText;
     });
-}
-
-function startDirectGenerate() {
-  const form = new FormData();
-  form.append('agent_name', document.getElementById('agentName').value);
-  form.append('agent_phone', document.getElementById('agentPhone').value);
-  form.append('agent_email', document.getElementById('agentEmail').value);
-  form.append('print_safe_logo', document.getElementById('printSafeLogo').checked ? '1' : '');
-  form.append('letter_body', letterEl.value);
-  selectedFiles.forEach(f => form.append('files', f));
-
-  generateBtn.disabled = true;
-  const btnLabel = 'Generate all mailers';
-  generateBtn.textContent = 'Generating ' + selectedFiles.length + ' mailer(s)...';
-  statusEl.textContent = 'This can take a little while for a large batch -- please leave this tab open.';
-
-  handleZipResponse(
-    fetch('/generate_mailer', { method: 'POST', body: form }),
-    'PEAR_Mailers_Batch.zip', generateBtn, btnLabel, statusEl,
-    'Done -- check the zip\\'s _batch_summary.txt for any fallback greetings, warnings, or files that failed to parse.'
-  );
 }
 
 function startReview() {
@@ -1632,11 +1562,7 @@ generateBtn.addEventListener('click', () => {
   saveAgentSettings();
   saveLetter();
   if (!selectedFiles.length) return;
-  if (reviewModeEl.checked) {
-    startReview();
-  } else {
-    startDirectGenerate();
-  }
+  startReview();
 });
 </script>
 </body>
@@ -1658,7 +1584,6 @@ def batch_page():
 def mailer_page():
     return render_template_string(
         MAILER_PAGE, cfg=DEFAULT_AGENT, default_letter=DEFAULT_LETTER_BODY,
-        review_max=REVIEW_BATCH_MAX_FILES,
     )
 
 
@@ -1863,145 +1788,15 @@ def generate_batch():
     )
 
 
-@app.route("/generate_mailer", methods=["POST"])
-def generate_mailer():
-    files = request.files.getlist("files")
-    if not files:
-        return jsonify({"error": "No files uploaded"}), 400
-
-    agent_name = request.form.get("agent_name", "").strip() or "Brian Elmore"
-    agent_phone = request.form.get("agent_phone", "").strip()
-    agent_email = request.form.get("agent_email", "").strip() or "brian@justinlucasgroup.com"
-    print_safe_logo = bool(request.form.get("print_safe_logo", "").strip())
-    letter_template = request.form.get("letter_body", "").strip() or DEFAULT_LETTER_BODY
-
-    # Timestamp the zip itself (not the individual PDFs inside it) so
-    # re-running the same batch/mailer -- tomorrow, or twice in a row --
-    # never overwrites/collides with an earlier run's download on Brian's
-    # computer. mo.day.year_HH.MM, 24-hour clock, per Brian's convention.
-    run_stamp = datetime.datetime.now().strftime("%m.%d.%Y_%H.%M")
-
-    # Same no-review, one-try/except-per-file pipeline as plain batch
-    # mode, plus a mail-merged cover letter (page 1) ahead of the report
-    # in the SAME pdf. The summary additionally flags which properties
-    # got the generic "Dear Homeowner" fallback greeting, since that's
-    # the one thing about a mailed piece worth a human glancing at before
-    # it goes out -- everything else follows the same "fix it via the
-    # normal single-report flow if it looks off" pattern as batch mode.
-    results = []
-    zip_buf = io.BytesIO()
-    with zipfile.ZipFile(zip_buf, "w", zipfile.ZIP_DEFLATED) as zf:
-        used_names = set()
-        for f in files:
-            original_name = f.filename or "report.pdf"
-            try:
-                data = detect_and_parse(f.read(), original_name)
-                fields, computed = _default_fields_from_parsed(data)
-                letter, used_fallback_greeting = _build_letter(data, fields, letter_template, agent_name)
-
-                # Keep the enclosed PEAR report consistent with the letter
-                # sitting right in front of it -- a mailed piece that opens
-                # with "Dear Homeowner," but then names an actual (possibly
-                # wrong) person, or falls back to the generic "Valued
-                # Client," a couple pages later reads like two different
-                # documents got stapled together. Same fallback decision
-                # (_safe_greeting_name via _build_letter) drives both.
-                if used_fallback_greeting:
-                    fields["client_name"] = "Current Homeowner"
-
-                out_name = f"PEAR_{uuid.uuid4().hex[:8]}.pdf"
-                out_path = os.path.join(OUTPUT_DIR, out_name)
-                render_pear(
-                    fields, computed, out_path,
-                    agent_name=agent_name, agent_phone=agent_phone, agent_email=agent_email,
-                    print_safe_logo=print_safe_logo, letter=letter,
-                )
-
-                safe_address = _safe_filename_part(fields["full_address"], "Property")
-                safe_client = _safe_filename_part(fields["client_name"], "Client")
-                pdf_name = f"PEAR_Mailer_{safe_address}_{safe_client}.pdf"
-                base_name = pdf_name[:-4]
-                n = 2
-                while pdf_name in used_names:
-                    pdf_name = f"{base_name}_{n}.pdf"
-                    n += 1
-                used_names.add(pdf_name)
-
-                with open(out_path, "rb") as pf:
-                    zf.writestr(pdf_name, pf.read())
-                try:
-                    os.remove(out_path)
-                except OSError:
-                    pass
-
-                warnings = list(data.get("parse_warnings") or [])
-                if used_fallback_greeting:
-                    warnings.append(
-                        f"Owner name on record ('{data.get('owner_names_display') or 'blank'}') "
-                        "didn't look reliable enough to print in the greeting/address, so this "
-                        "letter uses 'Dear Homeowner,' instead."
-                    )
-
-                results.append({
-                    "source_file": original_name,
-                    "output_file": pdf_name,
-                    "status": "Generated",
-                    "warnings": warnings,
-                })
-            except Exception as e:
-                traceback.print_exc()
-                results.append({
-                    "source_file": original_name,
-                    "output_file": None,
-                    "status": f"FAILED to generate: {e}",
-                    "warnings": [],
-                })
-
-        summary_lines = [
-            "PEAR Mailer Batch -- Summary",
-            f"{len(results)} file(s) processed, {sum(1 for r in results if r['output_file'])} PDF(s) generated.",
-            "",
-            "Each PDF has the cover letter as page 1 and the PEAR report as page 2+.",
-            "Every report used default values (average of the 3 AVMs, parsed mortgage",
-            "balance, ~25%-above-value target price) with no per-file review -- same as",
-            "batch mode. If a property below shows a warning (including a fallback",
-            "'Dear Homeowner' greeting), it's worth a quick look before mailing; if the",
-            "whole thing looks off, regenerate that one through the normal single-report",
-            "flow so you can review/correct it first.",
-            "",
-        ]
-        for r in results:
-            summary_lines.append(f"- {r['source_file']}  ->  {r['output_file'] or '(not generated)'}")
-            summary_lines.append(f"    Status: {r['status']}")
-            for w in r["warnings"]:
-                summary_lines.append(f"    Heads up: {w}")
-            summary_lines.append("")
-        zf.writestr("_batch_summary.txt", "\n".join(summary_lines))
-
-    zip_buf.seek(0)
-    return send_file(
-        zip_buf,
-        as_attachment=True,
-        download_name=f"PEAR_Mailers_Batch_{run_stamp}.zip",
-        mimetype="application/zip",
-    )
-
-
 @app.route("/mailer_parse", methods=["POST"])
 def mailer_parse():
-    """Step 1 of Mailer Review mode: parse up to 5 files (no PDFs are
+    """Step 1 of Mailer mode: parse the uploaded files (no PDFs are
     generated yet) and hand back each one's default fields plus a
     suggested owner name, so the browser can show an editable review
     list before anything gets rendered."""
     files = request.files.getlist("files")
     if not files:
         return jsonify({"error": "No files uploaded"}), 400
-    if len(files) > REVIEW_BATCH_MAX_FILES:
-        return jsonify({
-            "error": f"Review mode supports up to {REVIEW_BATCH_MAX_FILES} files at a time. "
-                     "Uncheck review mode to generate a larger batch without per-file review, "
-                     "or trim your selection."
-        }), 400
 
     items = []
     errors = []
@@ -2101,7 +1896,7 @@ def mailer_review_generate():
                 greeting_name = edited_name or "Homeowner"
                 fields["client_name"] = edited_name or "Current Homeowner"
 
-                letter = _build_letter_manual(fields, letter_template, agent_name, greeting_name)
+                letter = _build_letter(fields, letter_template, agent_name, greeting_name)
 
                 out_name = f"PEAR_{uuid.uuid4().hex[:8]}.pdf"
                 out_path = os.path.join(OUTPUT_DIR, out_name)
