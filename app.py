@@ -2011,17 +2011,27 @@ def mailer_parse():
             data = detect_and_parse(f.read(), original_name)
             fields, computed = _default_fields_from_parsed(data)
             owner_name = data.get("owner_names_display") or ""
-            safe_name = _safe_greeting_name(owner_name, data.get("owner_names_raw"))
+            owner_name_raw = data.get("owner_names_raw") or ""
+            safe_name = _safe_greeting_name(owner_name, owner_name_raw)
+            # Always show the actual parsed name, even when it failed the
+            # automatic reliability check -- the whole point of this
+            # review step is letting Brian look at it and decide for
+            # himself, not hiding it behind a blank field. But once a name
+            # IS flagged, show the RAW public-record text (e.g. "PAUL W
+            # TOBEN TRUST") rather than _format_owner_names()'s reformat --
+            # that reformat assumes a plain "LAST FIRST" pattern that
+            # trust/multi-owner entries don't reliably follow, so for a
+            # flagged name it can misrepresent the record (dropping a
+            # word, or reordering it into something that reads wrong)
+            # instead of just looking untrusted. A name that passed the
+            # check keeps the cleaned-up version since it's already
+            # reliable there.
+            suggested_name = owner_name if safe_name is not None else owner_name_raw
             items.append({
                 "source_file": original_name,
                 "fields": fields,
                 "computed": computed,
-                # Always show the actual parsed name, even when it failed
-                # the automatic reliability check -- the whole point of
-                # this review step is letting Brian look at it and decide
-                # for himself, not hiding it behind a blank field. The
-                # "needs review" flag still drives the warning below it.
-                "suggested_name": owner_name,
+                "suggested_name": suggested_name,
                 "name_needs_review": safe_name is None,
                 "parse_warnings": data.get("parse_warnings") or [],
             })

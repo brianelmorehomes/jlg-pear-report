@@ -199,15 +199,42 @@ def parse_remine_pdf(file_bytes):
         data["parse_warnings"].append("Could not parse the beds/baths/value summary line.")
 
     # ---- Owned for X years / owner names ----
-    owned_m = re.search(r"Owned for ([\d.]+) years?\s*\S\s*(.+)", full_text)
-    if owned_m:
-        data["owned_years"] = _to_number(owned_m.group(1))
-        data["owner_names_raw"] = _clean_ws(owned_m.group(2))
+    # The owner-name line is always the line immediately after the
+    # beds/baths/value stat line -- true in every sample seen, whether or
+    # not Remine attached an "Owned for X years" duration prefix to it.
+    # A property with no ownership-tenure data on record just prints the
+    # bare name with no prefix at all (e.g. "SCHWEIZER GREGORY" alone,
+    # nothing before it). This used to be a standalone search for the
+    # literal phrase "Owned for ... years" anywhere in the document,
+    # which came back completely empty in two real cases: (1) that
+    # no-prefix case, since there's no such phrase to find at all, and
+    # (2) "Owned for 30+ years" -- the "+" broke the "\d+ years?" match
+    # outright. Anchoring on position (right after the stat line) instead
+    # of that phrase fixes both, and is also safer than anchoring near
+    # the later "Taxes" section heading, which can be pages away from the
+    # owner line in the "Agent Full" cover-page print view and would pick
+    # up unrelated text sitting just above it there.
+    owner_line = None
+    if type_m:
+        after_stat = full_text[type_m.end():]
+        line_m = re.match(r"\s*\n([^\n]+)", after_stat)
+        if line_m:
+            owner_line = line_m.group(1).strip()
+
+    if owner_line:
+        dur_m = re.match(r"Owned for\s+([\d.]+)\+?\s*years?\s*\S?\s*(.+)$", owner_line)
+        if dur_m:
+            data["owned_years"] = _to_number(dur_m.group(1))
+            data["owner_names_raw"] = _clean_ws(dur_m.group(2))
+        else:
+            data["owned_years"] = None
+            data["owner_names_raw"] = _clean_ws(owner_line)
         data["owner_names_display"] = _format_owner_names(data["owner_names_raw"])
     else:
         data["owned_years"] = None
         data["owner_names_raw"] = ""
         data["owner_names_display"] = ""
+        data["parse_warnings"].append("Could not find the owner name on record -- please fill it in manually.")
 
     # ---- Year built ----
     data["year_built"] = _to_int_money(_first(r"Year Built\s+(\d{4})", full_text))
