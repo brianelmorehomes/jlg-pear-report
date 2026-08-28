@@ -296,7 +296,23 @@ def parse_remine_pdf(file_bytes):
         data["mortgage_rate"] = None
         data["mortgage_type"] = ""
         data["mortgage_lender"] = ""
-        data["parse_warnings"].append("No active mortgage found on record (property may be paid off, or the loan simply isn't in public filings).")
+        if data["loan_balance_est"] is None and data["percent_equity"] == 100:
+            # Remine's own "Net Equity" panel confirms 100% equity for a
+            # paid-off property, but simply OMITS the "Loan Balance" line
+            # entirely instead of printing "$0" -- this used to leave
+            # loan_balance_est as None ("unknown"), which silently blanked
+            # out the whole Equity Breakdown section (equity %, down
+            # payment power, move-up buyer potential) on exactly the kind
+            # of client this report is often most useful for: a long-term
+            # owner who paid their home off. 100% equity on record means
+            # the balance really is zero, not unknown, so default it.
+            data["loan_balance_est"] = 0
+            data["parse_warnings"].append(
+                "No active mortgage found on record -- Remine's own Percent Equity figure "
+                "confirms this property is paid off, so the mortgage balance defaults to $0."
+            )
+        else:
+            data["parse_warnings"].append("No active mortgage found on record (property may be paid off, or the loan simply isn't in public filings).")
 
     # ---- Valuation block: 3 AVMs (First American / Zillow / Remine) ----
     # NOTE: this table can get split across a page break -- the "Est.
