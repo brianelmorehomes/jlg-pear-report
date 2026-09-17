@@ -237,30 +237,38 @@ def parse_remine_pdf(file_bytes):
         data["parse_warnings"].append("Could not find the owner name on record -- please fill it in manually.")
 
     # ---- Owner mailing address (may differ from the property address) ----
-    # County assessor rolls -- which Remine's public-record data is sourced
-    # from -- always carry a separate mailing address for tax-bill delivery,
-    # so an absentee owner, landlord, or someone who's since moved but kept
-    # the property is a real and fairly common case, not an edge case.
-    # Remine appears to only print this line at all when it differs from
-    # the situs/property address (every same-address sample seen so far has
-    # no such line), so the mere presence of a match is already a decent
-    # signal, but the explicit compare below is kept as a second safety net
-    # in case a future report ever prints it unconditionally.
-    # NOTE: this label wording ("Mailing Address" / "Owner Mailing Address"
-    # / "Tax Mailing Address") is a best-effort guess, not yet confirmed
-    # against a real report that actually has a differing mailing address --
-    # every sample seen so far happened to have mailing == situs. If a real
-    # mismatch case doesn't get picked up, send that report through so the
-    # exact wording can be fixed rather than guessed at again. Either way,
-    # Mailer Mode's review step means Brian always sees and can fill in or
-    # correct this by hand before anything is mailed -- this auto-detection
-    # is a convenience on top of that, not the safety net itself.
-    mail_addr_m = re.search(
-        r"(?:Owner\s+|Tax\s+)?Mailing Address\s*:?\s*\n?\s*([^\n]+)",
+    # Confirmed against a real sample (749 Holland St, Saugatuck -- owners
+    # Robert & Maria Siegel, mailing address 1105 Nashville Ave, New
+    # Orleans). It lives in the "Public Record Details" section as a
+    # left-column "Key Stats" field, right next to "Absentee Owner" (which
+    # was "Yes" on that sample) and always immediately followed by
+    # "County" as the next Key Stats field -- so "County" is a reliable
+    # right-hand boundary for the chunk regardless of how many lines the
+    # address itself wraps to.
+    #
+    # That two-column layout is also the trap: pdfplumber's linear text
+    # extraction sometimes splices the neighboring "Building Features"
+    # column's label+value (e.g. "Full Baths 2") onto the same line as
+    # this field, exactly like the pre-existing Active Mortgage/Flood Risk
+    # bleed-through handled above. On the real sample this looked like:
+    #   "Mailing Address 1105 NASHVILLE AVE Full Baths 2\nNEW ORLEANS LA 70115"
+    # -- "Full Baths 2" isn't part of the address, so it gets stripped
+    # before the two lines are joined back into one clean address string.
+    mail_chunk_m = re.search(
+        r"Mailing Address\s+(.*?)(?=\n\s*County\b)",
         full_text,
-        re.IGNORECASE,
+        re.IGNORECASE | re.DOTALL,
     )
-    mailing_address_raw = _clean_ws(mail_addr_m.group(1)) if mail_addr_m else ""
+    mailing_address_raw = ""
+    if mail_chunk_m:
+        chunk = re.sub(
+            r"\b(?:Full Baths|Half Baths|Bedrooms|Total SqFt|Tax Living Area|"
+            r"Basement SqFt|Stories)\s+[\d,.]+",
+            "",
+            mail_chunk_m.group(1),
+            flags=re.IGNORECASE,
+        )
+        mailing_address_raw = _clean_ws(chunk)
 
     def _norm_addr(s):
         return re.sub(r"[^A-Z0-9]", "", (s or "").upper())

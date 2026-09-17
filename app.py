@@ -198,32 +198,97 @@ def _safe_greeting_name(owner_names_display, owner_names_raw=None):
     return name
 
 
-def _split_address_for_letter(full_address):
-    """Remine prints the property address as one unbroken line ('6346 N
-    HERMITAGE AVE CHICAGO IL 60660') with no comma before the city. This
-    is a best-effort split into a street line and a city/state/zip line
-    for the letter's inside-address block, assuming a standard US address
-    ending in 'CITY STATE ZIP' with a single-word city -- true for every
-    sample seen so far (all Chicago). If the pattern doesn't match, or the
-    city turns out to be multi-word, the whole string is used as a single
-    line rather than guessing wrong.
+# Standard USPS street-suffix abbreviations/spellouts -- used to find the
+# real street/city boundary in an unpunctuated Remine address line (see
+# _split_street_city_state_zip below). Not exhaustive, but covers what
+# actually shows up in Chicago and West Michigan lakeshore addresses.
+_STREET_SUFFIXES = {
+    "AVE", "AVENUE", "ST", "STREET", "DR", "DRIVE", "RD", "ROAD", "LN", "LANE",
+    "CT", "COURT", "WAY", "BLVD", "BOULEVARD", "CIR", "CIRCLE", "PL", "PLACE",
+    "TER", "TERRACE", "PKWY", "PARKWAY", "HWY", "HIGHWAY", "TRL", "TRAIL",
+    "LOOP", "SQ", "SQUARE", "PT", "POINTE", "POINT", "XING", "CSWY", "PLZ",
+    "PLAZA", "ROW", "RUN", "WALK", "PATH", "ALY", "ALLEY", "PIKE", "EXPY",
+    "EXPRESSWAY", "BND", "BEND", "CV", "COVE", "CRES", "CRESCENT", "GLN",
+    "GLEN", "GRV", "GROVE", "HL", "HILL", "HLS", "HILLS", "HOLW", "HOLLOW",
+    "IS", "ISLAND", "KNL", "KNOLL", "MDW", "MEADOW", "MDWS", "MEADOWS",
+    "PARK", "PASS", "RDG", "RIDGE", "SHRS", "SHORES", "SPGS", "SPRINGS",
+    "STA", "STATION", "VLY", "VALLEY", "VW", "VIEW", "VIS", "VISTA",
+}
+# Secondary/unit designators that can trail the street suffix -- these (plus
+# their value token, e.g. "UNIT 4") belong on the street line, not the city.
+_UNIT_DESIGNATORS = {"UNIT", "APT", "STE", "SUITE", "BLDG", "FL", "FLOOR", "RM", "ROOM"}
 
-    The street-address group is deliberately GREEDY (.*, not .*?): with a
-    non-greedy group here, the regex engine grabs the shortest possible
-    street match and lets the single-word "city" group absorb everything
-    else it can -- which, for '6350 N HERMITAGE AVE CHICAGO IL 60660',
-    means the direction prefix ("N") gets swallowed into the city instead
-    of staying with the street ('6350' / 'N Hermitage Ave Chicago, IL
-    60660' -- wrong). Greedy correctly leaves exactly one trailing word
-    for the city instead."""
+
+def _split_street_city_state_zip(full_address):
+    """Remine prints addresses as one unbroken line ('6350 N HERMITAGE AVE
+    CHICAGO IL 60660') with no comma before the city, so splitting it into
+    street vs. city requires guessing where the street ends. The state (2
+    letters) + zip at the very end is unambiguous and gets peeled off
+    first; from what's left, the split point is anchored on the LAST
+    recognized street suffix (Ave, St, Dr, ...) rather than assuming a
+    single trailing word is the city -- a single-word assumption breaks on
+    any multi-word city (e.g. 'New Orleans', 'Grand Haven'), which a
+    mailing address (unlike Brian's usual Chicago/West MI property
+    addresses) can plausibly be anywhere in the country.
+
+    Falls back to the old single-trailing-word assumption when no known
+    suffix is found (PO boxes, an unrecognized street type) -- right for
+    every same-format sample seen before, wrong only for the rarer case of
+    an unrecognized street type paired with a multi-word city, which isn't
+    solvable without a real city gazetteer.
+
+    Returns (street, city, state, zip) all still needing .title(), or None
+    if the address doesn't end in a recognizable 'STATE ZIP'."""
     addr = (full_address or "").strip()
     if not addr:
-        return "", ""
-    m = re.match(r"^(.*)\s+([A-Za-z]+)\s+([A-Z]{2})\s+(\d{5}(?:-\d{4})?)$", addr)
+        return None
+    m = re.match(r"^(.*?)\s+([A-Z]{2})\s+(\d{5}(?:-\d{4})?)$", addr)
     if not m:
-        return addr, ""
-    street, city, state, zip_code = m.groups()
-    return street.strip().title(), f"{city.strip().title()}, {state} {zip_code}"
+        return None
+    remainder, state, zip_code = m.groups()
+    tokens = remainder.split()
+    if not tokens:
+        return None
+
+    suffix_idx = None
+    for i, tok in enumerate(tokens):
+        if tok.upper().rstrip(".,") in _STREET_SUFFIXES:
+            suffix_idx = i  # keep the LAST match
+
+    street_tokens = city_tokens = None
+    if suffix_idx is not None:
+        split_at = suffix_idx + 1
+        if (split_at < len(tokens)
+                and tokens[split_at].upper().rstrip(".,") in _UNIT_DESIGNATORS
+                and split_at + 1 < len(tokens)):
+            split_at += 2  # absorb "UNIT 4" etc. into the street line
+        if split_at < len(tokens):
+            street_tokens, city_tokens = tokens[:split_at], tokens[split_at:]
+
+    if street_tokens is None:
+        street_tokens, city_tokens = tokens[:-1], tokens[-1:]
+        if not street_tokens:
+            return None
+
+    return (
+        " ".join(street_tokens).strip().title(),
+        " ".join(city_tokens).strip().title(),
+        state,
+        zip_code,
+    )
+
+
+def _split_address_for_letter(full_address):
+    """Splits a Remine address into a street line and a city/state/zip
+    line for the letter's inside-address block. See
+    _split_street_city_state_zip for how the split point is chosen. If
+    the address doesn't end in a recognizable state+zip at all, the whole
+    string is used as a single line rather than guessing wrong."""
+    parts = _split_street_city_state_zip(full_address)
+    if not parts:
+        return (full_address or "").strip(), ""
+    street, city, state, zip_code = parts
+    return street, f"{city}, {state} {zip_code}"
 
 
 def _first_names_only(name):
@@ -249,17 +314,17 @@ def _format_address_for_display(full_address):
     PEAR report itself, but reads like a data dump in the middle of a
     cover-letter sentence ('...the numbers for 6350 N HERMITAGE AVE
     CHICAGO IL 60660 were worth sharing'). Reuses the same street/city/
-    state/zip split as the inside address block so the state abbreviation
-    and zip stay exactly as printed rather than getting title-cased into
-    something like 'Il'."""
+    state/zip split as the inside address block (_split_street_city_state_zip)
+    so the state abbreviation and zip stay exactly as printed rather than
+    getting title-cased into something like 'Il'."""
     addr = (full_address or "").strip()
     if not addr:
         return addr
-    m = re.match(r"^(.*)\s+([A-Za-z]+)\s+([A-Z]{2})\s+(\d{5}(?:-\d{4})?)$", addr)
-    if not m:
+    parts = _split_street_city_state_zip(addr)
+    if not parts:
         return addr.title()
-    street, city, state, zip_code = m.groups()
-    return f"{street.strip().title()} {city.strip().title()}, {state} {zip_code}"
+    street, city, state, zip_code = parts
+    return f"{street} {city}, {state} {zip_code}"
 
 
 def _build_letter(fields, letter_template, agent_name, owner_name):
