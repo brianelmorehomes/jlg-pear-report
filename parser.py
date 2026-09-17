@@ -237,23 +237,40 @@ def parse_remine_pdf(file_bytes):
         data["parse_warnings"].append("Could not find the owner name on record -- please fill it in manually.")
 
     # ---- Owner mailing address (may differ from the property address) ----
-    # Confirmed against a real sample (749 Holland St, Saugatuck -- owners
+    # Confirmed against two real samples: 749 Holland St, Saugatuck (owners
     # Robert & Maria Siegel, mailing address 1105 Nashville Ave, New
-    # Orleans). It lives in the "Public Record Details" section as a
-    # left-column "Key Stats" field, right next to "Absentee Owner" (which
-    # was "Yes" on that sample) and always immediately followed by
+    # Orleans -- a 2-line wrap) and 1447 N Cleveland Ave Apt E, Chicago
+    # (mailing address 400L E Randolph St Apt 2508, Chicago -- a 3-line
+    # wrap). It lives in the "Public Record Details" section as a
+    # left-column "Key Stats" field, always immediately followed by
     # "County" as the next Key Stats field -- so "County" is a reliable
-    # right-hand boundary for the chunk regardless of how many lines the
-    # address itself wraps to.
+    # right-hand boundary for the whole chunk regardless of how many lines
+    # the address itself wraps to.
     #
     # That two-column layout is also the trap: pdfplumber's linear text
-    # extraction sometimes splices the neighboring "Building Features"
-    # column's label+value (e.g. "Full Baths 2") onto the same line as
-    # this field, exactly like the pre-existing Active Mortgage/Flood Risk
-    # bleed-through handled above. On the real sample this looked like:
-    #   "Mailing Address 1105 NASHVILLE AVE Full Baths 2\nNEW ORLEANS LA 70115"
-    # -- "Full Baths 2" isn't part of the address, so it gets stripped
-    # before the two lines are joined back into one clean address string.
+    # extraction splices the neighboring "Building Features" column's
+    # label+value onto whichever row it lands on. For a short (1-2 line)
+    # address that's just trailing noise on the same line as real address
+    # text (e.g. "Mailing Address 1105 NASHVILLE AVE Full Baths 2"). But a
+    # longer wrap desyncs the two columns further with each extra line, so
+    # unrelated fields can land on their OWN line in between real address
+    # lines too -- the Cleveland Ave sample actually printed "Year Built
+    # 1997" and "Basement Type Unfinished Basement" as stray lines sitting
+    # between "APT 2508" and "CHICAGO IL 60601". So this can't just strip
+    # trailing noise from one line; it walks every line in the chunk,
+    # truncates each one at the first recognized non-address label it
+    # finds (dropping the label and everything after it on that line --
+    # if the label is the very first thing on the line, the whole line is
+    # dropped), and keeps whatever real address text is left, in order.
+    _NON_ADDRESS_LABELS = (
+        "Full Baths", "Half Baths", "Bedrooms", "Total SqFt", "Tax Living Area",
+        "Basement SqFt", "Basement Type", "Year Built", "Stories", "Structure",
+        "Construction", "Roof Cover Type", "Garage Spaces", "Garage",
+    )
+    _non_address_label_re = re.compile(
+        r"\b(?:" + "|".join(re.escape(lbl) for lbl in _NON_ADDRESS_LABELS) + r")\b",
+        re.IGNORECASE,
+    )
     mail_chunk_m = re.search(
         r"Mailing Address\s+(.*?)(?=\n\s*County\b)",
         full_text,
@@ -261,14 +278,13 @@ def parse_remine_pdf(file_bytes):
     )
     mailing_address_raw = ""
     if mail_chunk_m:
-        chunk = re.sub(
-            r"\b(?:Full Baths|Half Baths|Bedrooms|Total SqFt|Tax Living Area|"
-            r"Basement SqFt|Stories)\s+[\d,.]+",
-            "",
-            mail_chunk_m.group(1),
-            flags=re.IGNORECASE,
-        )
-        mailing_address_raw = _clean_ws(chunk)
+        kept_lines = []
+        for line in mail_chunk_m.group(1).split("\n"):
+            label_m = _non_address_label_re.search(line)
+            piece = (line[: label_m.start()] if label_m else line).strip()
+            if piece:
+                kept_lines.append(piece)
+        mailing_address_raw = _clean_ws(" ".join(kept_lines))
 
     def _norm_addr(s):
         return re.sub(r"[^A-Z0-9]", "", (s or "").upper())
