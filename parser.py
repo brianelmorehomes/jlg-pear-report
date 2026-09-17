@@ -236,6 +236,46 @@ def parse_remine_pdf(file_bytes):
         data["owner_names_display"] = ""
         data["parse_warnings"].append("Could not find the owner name on record -- please fill it in manually.")
 
+    # ---- Owner mailing address (may differ from the property address) ----
+    # County assessor rolls -- which Remine's public-record data is sourced
+    # from -- always carry a separate mailing address for tax-bill delivery,
+    # so an absentee owner, landlord, or someone who's since moved but kept
+    # the property is a real and fairly common case, not an edge case.
+    # Remine appears to only print this line at all when it differs from
+    # the situs/property address (every same-address sample seen so far has
+    # no such line), so the mere presence of a match is already a decent
+    # signal, but the explicit compare below is kept as a second safety net
+    # in case a future report ever prints it unconditionally.
+    # NOTE: this label wording ("Mailing Address" / "Owner Mailing Address"
+    # / "Tax Mailing Address") is a best-effort guess, not yet confirmed
+    # against a real report that actually has a differing mailing address --
+    # every sample seen so far happened to have mailing == situs. If a real
+    # mismatch case doesn't get picked up, send that report through so the
+    # exact wording can be fixed rather than guessed at again. Either way,
+    # Mailer Mode's review step means Brian always sees and can fill in or
+    # correct this by hand before anything is mailed -- this auto-detection
+    # is a convenience on top of that, not the safety net itself.
+    mail_addr_m = re.search(
+        r"(?:Owner\s+|Tax\s+)?Mailing Address\s*:?\s*\n?\s*([^\n]+)",
+        full_text,
+        re.IGNORECASE,
+    )
+    mailing_address_raw = _clean_ws(mail_addr_m.group(1)) if mail_addr_m else ""
+
+    def _norm_addr(s):
+        return re.sub(r"[^A-Z0-9]", "", (s or "").upper())
+
+    if mailing_address_raw and _norm_addr(mailing_address_raw) != _norm_addr(data.get("full_address")):
+        data["mailing_address"] = mailing_address_raw
+        data["parse_warnings"].append(
+            "Public county property records show a mailing address on file for this owner "
+            "that's different from the property itself (common for rentals or absentee "
+            "owners) -- pre-filled below as the mailing address, double-check it before "
+            "mailing anything."
+        )
+    else:
+        data["mailing_address"] = ""
+
     # ---- Year built ----
     data["year_built"] = _to_int_money(_first(r"Year Built\s+(\d{4})", full_text))
 

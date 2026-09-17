@@ -108,6 +108,11 @@ def _default_fields_from_parsed(data):
     fields = {
         "client_name": data.get("owner_names_display") or "",
         "full_address": data.get("full_address") or "",
+        # Owner mailing address on record, when Remine shows one that
+        # differs from the property address (absentee owner, landlord,
+        # etc.) -- blank whenever there's nothing to override. See
+        # parser.py for how/why this gets detected.
+        "mailing_address": data.get("mailing_address") or "",
         "beds": data.get("beds"),
         "baths": data.get("baths"),
         "sqft": data.get("sqft"),
@@ -267,9 +272,19 @@ def _build_letter(fields, letter_template, agent_name, owner_name):
     typed in themselves -- there's no separate automatic entity/trust/
     reversed-name safety-net path anymore; a person reviewing the name IS
     the safety check. An empty/whitespace-only name still falls back to
-    "Homeowner" as a last resort rather than printing a blank greeting."""
+    "Homeowner" as a last resort rather than printing a blank greeting.
+
+    The envelope/inside-address block (address_line1/2) uses fields'
+    mailing_address when one is set -- an absentee owner, landlord, etc.
+    on record with a different mailing address than the property itself.
+    The letter's BODY still always talks about the property address
+    (property_address, below) since that's the property being discussed,
+    regardless of where the letter physically gets mailed."""
     owner_name = (owner_name or "").strip() or "Homeowner"
-    address_line1, address_line2 = _split_address_for_letter(fields.get("full_address"))
+    mailing_address = (fields.get("mailing_address") or "").strip()
+    address_line1, address_line2 = _split_address_for_letter(
+        mailing_address or fields.get("full_address")
+    )
     property_address = _format_address_for_display(fields.get("full_address")) or "your property"
 
     merged = (letter_template or DEFAULT_LETTER_BODY)
@@ -1497,6 +1512,22 @@ function showReviewCard(items, parseErrors) {
     row.appendChild(addrField);
     box.appendChild(row);
 
+    const mailRow = document.createElement('div');
+    mailRow.className = 'row';
+    const mailField = document.createElement('div');
+    mailField.className = 'field';
+    const mailLabel = document.createElement('label');
+    mailLabel.textContent = 'Mailing address (only if different from property)';
+    const mailInput = document.createElement('input');
+    mailInput.type = 'text';
+    mailInput.className = 'review-mailing-address';
+    mailInput.placeholder = 'Leave blank to mail to the property address above';
+    mailInput.value = (item.fields && item.fields.mailing_address) || '';
+    mailField.appendChild(mailLabel);
+    mailField.appendChild(mailInput);
+    mailRow.appendChild(mailField);
+    box.appendChild(mailRow);
+
     if (item.parse_warnings && item.parse_warnings.length) {
       const note = document.createElement('div');
       note.className = 'review-note';
@@ -1531,6 +1562,7 @@ reviewGenerateBtn.addEventListener('click', () => {
   const edits = Array.from(reviewListEl.querySelectorAll('.review-item')).map(box => ({
     client_name: box.querySelector('.review-name').value,
     full_address: box.querySelector('.review-address').value,
+    mailing_address: box.querySelector('.review-mailing-address').value,
   }));
 
   const payload = {
@@ -1892,6 +1924,14 @@ def mailer_review_generate():
                 edited_address = ((edit or {}).get("full_address") or "").strip()
                 if edited_address:
                     fields["full_address"] = edited_address
+                # Mailing address is optional and explicitly cleared-able --
+                # unlike name/property address (which fall back to what was
+                # parsed if left blank), an edit here always wins, including
+                # blanking it out, since a reviewer un-checking/erasing a
+                # wrongly auto-detected mailing address should mean "mail to
+                # the property address instead," not "keep the old guess."
+                if "mailing_address" in (edit or {}):
+                    fields["mailing_address"] = (edit.get("mailing_address") or "").strip()
 
                 greeting_name = edited_name or "Homeowner"
                 fields["client_name"] = edited_name or "Current Homeowner"
