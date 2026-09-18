@@ -360,23 +360,43 @@ def parse_remine_pdf(file_bytes):
         data["mortgage_rate"] = None
         data["mortgage_type"] = ""
         data["mortgage_lender"] = ""
-        if data["loan_balance_est"] is None and data["percent_equity"] == 100:
-            # Remine's own "Net Equity" panel confirms 100% equity for a
-            # paid-off property, but simply OMITS the "Loan Balance" line
-            # entirely instead of printing "$0" -- this used to leave
-            # loan_balance_est as None ("unknown"), which silently blanked
-            # out the whole Equity Breakdown section (equity %, down
-            # payment power, move-up buyer potential) on exactly the kind
-            # of client this report is often most useful for: a long-term
-            # owner who paid their home off. 100% equity on record means
-            # the balance really is zero, not unknown, so default it.
-            data["loan_balance_est"] = 0
+        if not (data["loan_balance_est"] is None and data["percent_equity"] == 100):
+            data["parse_warnings"].append("No active mortgage found on record (property may be paid off, or the loan simply isn't in public filings).")
+
+    # ---- 100%-equity fallback for a missing Loan Balance figure ----
+    # Remine's "Net Equity" panel is the CURRENT-STATE signal (Value / Loan
+    # Balance / Net Equity / Percent Equity) -- when it shows 100% equity,
+    # it simply OMITS the "Loan Balance" line entirely instead of printing
+    # "$0", which used to leave loan_balance_est as None ("unknown") and
+    # blank out the entire client-facing Equity Breakdown section
+    # ("Estimated Mortgage Balance -- --") despite Remine's own math saying
+    # the balance really is zero.
+    #
+    # This has to run AFTER (not just inside the "no Active Mortgage
+    # record" branch above), because a property can have BOTH: a mortgage
+    # document still on file from a past purchase (e.g. Orig. Amount
+    # $405,000 from a 2022 purchase) AND 100% current equity, if that loan
+    # has since been paid off/refinanced -- county filings don't
+    # automatically disappear on payoff. That's a real case (6074 Mallard
+    # Dr, Fennville), not a hypothetical: Percent Equity 100% with a still-
+    # printed Active Mortgage block. Only checking this in the "no mortgage
+    # found at all" branch missed exactly that case and left the report
+    # showing blank equity figures for a property Remine itself considers
+    # fully paid off.
+    if data["loan_balance_est"] is None and data["percent_equity"] == 100:
+        data["loan_balance_est"] = 0
+        if mort_start != -1:
+            data["parse_warnings"].append(
+                "This property still shows a mortgage on file (from a past purchase), but "
+                "Remine's own Percent Equity figure confirms it's fully paid off today -- the "
+                "mortgage balance used for the equity math defaults to $0 rather than the "
+                "original loan amount shown above."
+            )
+        else:
             data["parse_warnings"].append(
                 "No active mortgage found on record -- Remine's own Percent Equity figure "
                 "confirms this property is paid off, so the mortgage balance defaults to $0."
             )
-        else:
-            data["parse_warnings"].append("No active mortgage found on record (property may be paid off, or the loan simply isn't in public filings).")
 
     # ---- Valuation block: 3 AVMs (First American / Zillow / Remine) ----
     # NOTE: this table can get split across a page break -- the "Est.
