@@ -68,6 +68,10 @@ def _format_owner_names(raw):
     (e.g. a business/trust entity name instead of a person)."""
     if not raw:
         return ""
+    # Entities (trusts, LLCs, etc.) aren't "LAST FIRST" -- keep the name as is.
+    raw = re.sub(r"\s*\S?\s*absentee\s*$", "", raw, flags=re.I).strip()
+    if re.search(r"\b(TRUST|TRUSTEE|LLC|L\.L\.C|INC|CORP|LP|LTD|ESTATE|PARTNERS|HOLDINGS|BANK|ASSOCIATION)\b", raw, re.I):
+        return raw.title()
     people = [p.strip() for p in raw.split(",") if p.strip()]
     out = []
     for p in people:
@@ -176,10 +180,24 @@ def parse_remine_pdf(file_bytes):
     if type_m:
         ptype_s = type_m.group(1)
 
-    if beds_s and baths_s and sqft_s and value_s and equity_s:
-        data["beds"] = _to_int_money(beds_s)
-        data["baths"] = _to_int_money(baths_s)
-        data["sqft"] = _to_int_money(sqft_s)
+    # Baths/sqft are optional on the stat line: some records (e.g. a newer
+    # condo with no public-record square footage and no bath count) simply
+    # omit them -- "3 Beds · 0.906 Acres | $870,000 Est Value ...". Only the
+    # value and equity figures are truly required. Baths fall back to the
+    # Building Features block ("Full Baths N" / "Half Baths N") when the
+    # summary line doesn't carry them.
+    if baths_s is None:
+        fb = re.search(r"Full Baths\s+(\d+)", full_text)
+        hb = re.search(r"Half Baths\s+(\d+)", full_text)
+        # A "0 full / 0 half" count is missing data, not a real zero-bath home.
+        if fb and (int(fb.group(1)) > 0 or (hb and int(hb.group(1)) > 0)):
+            baths_s = fb.group(1)
+    if value_s and equity_s:
+        data["beds"] = _to_int_money(beds_s) if beds_s else None
+        data["baths"] = _to_int_money(baths_s) if baths_s else None
+        data["sqft"] = _to_int_money(sqft_s) if sqft_s else None
+        if not sqft_s:
+            data["parse_warnings"].append("No square footage on record for this property -- fill in manually if you want it shown.")
         data["lot_acres"] = _to_number(lot_s) if lot_s else None
         data["value_est"] = _to_int_money(value_s)
         data["net_equity_est"] = _to_int_money(equity_s)
@@ -223,9 +241,14 @@ def parse_remine_pdf(file_bytes):
 
     if owner_line:
         dur_m = re.match(r"Owned for\s+([\d.]+)\+?\s*years?\s*\S?\s*(.+)$", owner_line)
+        # "Owned for less than a year" (a recent purchase) has no number.
+        short_m = re.match(r"Owned for\s+less than (?:a|1)\s+year\s*\S?\s*(.+)$", owner_line, re.I)
         if dur_m:
             data["owned_years"] = _to_number(dur_m.group(1))
             data["owner_names_raw"] = _clean_ws(dur_m.group(2))
+        elif short_m:
+            data["owned_years"] = 0
+            data["owner_names_raw"] = _clean_ws(short_m.group(1))
         else:
             data["owned_years"] = None
             data["owner_names_raw"] = _clean_ws(owner_line)
@@ -265,7 +288,7 @@ def parse_remine_pdf(file_bytes):
     _NON_ADDRESS_LABELS = (
         "Full Baths", "Half Baths", "Bedrooms", "Total SqFt", "Tax Living Area",
         "Basement SqFt", "Basement Type", "Year Built", "Stories", "Structure",
-        "Construction", "Roof Cover Type", "Garage Spaces", "Garage",
+        "Construction", "Roof Cover Type", "Garage Spaces", "Garage", "Parking",
     )
     _non_address_label_re = re.compile(
         r"\b(?:" + "|".join(re.escape(lbl) for lbl in _NON_ADDRESS_LABELS) + r")\b",
