@@ -10,16 +10,25 @@ Reference example (from the KCM/Weichert-style PEAR layout Brian supplied):
     -> Total Estimated Home Equity: $315,000   (525,000 - 210,000)
     -> Equity Growth Milestone:     60%         (315,000 / 525,000)
     -> Value Appreciation:          $185,000    (525,000 - 340,000 2018 purchase)
-    -> Max Down Payment Power:      $252,000    (315,000 * 0.80)
-    -> Move-Up Buyer (on a $700,000 target):
-           down payment %  = 252,000 / 700,000 = 36%
-           PMI eliminated  = 36% >= 20%  -> True
-All five figures are checked against this example in verify_against_example()
+    -> Equity You Could Access:     $252,000    (315,000 * 0.80)
+All four figures are checked against this example in verify_against_example()
 below.
+
+NOTE: this module used to also compute a "Move-Up Buyer Potential" figure
+(a down payment % against an assumed next-home target price, plus a PMI-
+elimination flag). Brian's call (Cowork conversation, Nov 2026): that
+framing assumes the client wants to buy a bigger primary residence, which
+doesn't fit every recipient -- a downsizer, an investor, or an absentee
+owner gets the same pitch regardless of their actual situation. Section 3
+of the report was repositioned around the equity figure itself (what it
+is, what it could be used for) rather than one assumed next transaction,
+so suggested_target_price(), the move-up-% calc, and the PMI-threshold
+check were all removed along with it. down_payment_power (now labeled
+"Equity You Could Access" on the report) is the one figure from that old
+section that's still genuinely useful on its own, so it stayed.
 """
 
 DOWN_PAYMENT_POWER_PCT = 0.80  # "access up to 80% of your current equity"
-PMI_ELIMINATION_THRESHOLD_PCT = 20.0  # conventional-loan rule of thumb
 
 
 def round_nearest(value, nearest=25000):
@@ -28,24 +37,11 @@ def round_nearest(value, nearest=25000):
     return int(round(value / nearest) * nearest)
 
 
-def suggested_target_price(current_value):
-    """Default 'next home' price used to illustrate Move-Up Buyer Potential
-    on the review form, before the agent overrides it with something that
-    actually matches what this specific client is looking at. There's no
-    formula tying this to the client's real plans -- it's just current
-    value + 25%, rounded to a clean number, so the report doesn't render
-    with a blank/zero target before the agent has a chance to edit it."""
-    if not current_value:
-        return None
-    return round_nearest(current_value * 1.25, 25000)
-
-
 def compute_pear(
     value,
     loan_balance,
     last_purchase_price=None,
     last_purchase_date=None,
-    target_price=None,
 ):
     """All inputs are plain numbers (or None). Returns a dict of computed
     figures plus formatted display strings the template can drop straight
@@ -77,15 +73,6 @@ def compute_pear(
     else:
         out["down_payment_power"] = None
 
-    effective_target = target_price or suggested_target_price(value)
-    out["target_price"] = effective_target
-    if out["down_payment_power"] is not None and effective_target:
-        out["move_up_down_payment_pct"] = round(out["down_payment_power"] / effective_target * 100)
-        out["pmi_eliminated"] = out["move_up_down_payment_pct"] >= PMI_ELIMINATION_THRESHOLD_PCT
-    else:
-        out["move_up_down_payment_pct"] = None
-        out["pmi_eliminated"] = None
-
     return out
 
 
@@ -93,14 +80,12 @@ def verify_against_example():
     """Sanity check run at import time in debug/test contexts -- not
     called during normal request handling. Raises AssertionError with a
     clear message if the math ever drifts from Brian's worked example."""
-    r = compute_pear(value=525000, loan_balance=210000, last_purchase_price=340000, target_price=700000)
+    r = compute_pear(value=525000, loan_balance=210000, last_purchase_price=340000)
     checks = [
         ("total_equity", 315000),
         ("equity_percent", 60),
         ("appreciation", 185000),
         ("down_payment_power", 252000),
-        ("move_up_down_payment_pct", 36),
-        ("pmi_eliminated", True),
     ]
     for key, expected in checks:
         actual = r[key]

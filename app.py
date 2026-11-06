@@ -21,7 +21,7 @@ import zipfile
 from flask import Flask, request, jsonify, send_file, render_template_string
 
 from parser import detect_and_parse
-from calc import compute_pear, suggested_target_price
+from calc import compute_pear
 from render import render_pear
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -96,8 +96,6 @@ def _default_fields_from_parsed(data):
             except ValueError:
                 pass
 
-    target_price = data.get("suggested_target_price") or suggested_target_price(value)
-
     avms = []
     valuations = data.get("valuations") or {}
     for label, key in (("First American", "first_american"), ("Zillow", "zillow"), ("Remine", "remine")):
@@ -128,7 +126,6 @@ def _default_fields_from_parsed(data):
         value=value,
         loan_balance=loan_balance,
         last_purchase_price=last_purchase_price,
-        target_price=target_price,
     )
     return fields, computed
 
@@ -585,15 +582,6 @@ PAGE = """
       <div class="field"><label>Last purchase year</label><input type="text" id="f_last_purchase_year"></div>
     </div>
 
-    <div class="section-divider">Purchasing power</div>
-    <div class="row">
-      <div class="field">
-        <label>Move-up target home price</label>
-        <input type="text" id="f_target_price">
-        <div class="helper">Defaults to ~25% above current value &mdash; change this to whatever price range the client is actually considering.</div>
-      </div>
-    </div>
-
     <input type="hidden" id="f_avm_fa_est">
     <input type="hidden" id="f_avm_fa_low">
     <input type="hidden" id="f_avm_fa_high">
@@ -662,7 +650,7 @@ const generateBtn = document.getElementById('generateBtn');
 const reparseBtn = document.getElementById('reparseBtn');
 
 const FIELD_IDS = ['full_address','beds','baths','sqft','year_built','property_type',
-                    'value','loan_balance','last_purchase_price','last_purchase_year','target_price',
+                    'value','loan_balance','last_purchase_price','last_purchase_year',
                     'avm_fa_est','avm_fa_low','avm_fa_high','avm_zillow_est','avm_zillow_low','avm_zillow_high',
                     'avm_remine_est','avm_remine_low','avm_remine_high'];
 
@@ -760,7 +748,6 @@ function populateReview(data) {
     if (parts.length === 3) { let yy = parseInt(parts[2],10); year = (yy < 50 ? 2000+yy : 1900+yy); }
   }
   smartSet('f_last_purchase_year', year);
-  smartSet('f_target_price', data.suggested_target_price ?? '');
 
   const avm = data.valuations || {};
   const fa = avm.first_american || {}, zi = avm.zillow || {}, re = avm.remine || {};
@@ -1691,14 +1678,6 @@ def parse():
         return jsonify({"error": "No file uploaded"}), 400
     try:
         data = detect_and_parse(f.read(), f.filename or "report.pdf")
-        # Default the report's headline value to the average of whatever AVM
-        # estimates were found (Brian's call -- see the Cowork conversation:
-        # Remine's own "$X Est Value" stat-line figure is NOT an average, it's
-        # just whichever single source Remine chose to feature, which in
-        # testing exactly mirrored the First American AVM alone). Falls back
-        # to that headline figure only if no AVM table was found at all.
-        value = data.get("value_est_avg") or data.get("value_est")
-        data["suggested_target_price"] = suggested_target_price(value)
         return jsonify(data)
     except Exception as e:
         traceback.print_exc()
@@ -1720,13 +1699,11 @@ def generate():
         value = _num(request.form.get("value"))
         loan_balance = _num(request.form.get("loan_balance"))
         last_purchase_price = _num(request.form.get("last_purchase_price"))
-        target_price = _num(request.form.get("target_price"))
 
         computed = compute_pear(
             value=value,
             loan_balance=loan_balance,
             last_purchase_price=last_purchase_price,
-            target_price=target_price,
         )
 
         avms = []

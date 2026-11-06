@@ -207,16 +207,13 @@ h1, h2, h3 { margin: 0; padding: 0; }
 .milestone:before { content: "→"; position: absolute; left: 0; color: var(--ruge); font-weight: 700; }
 .milestone b { color: var(--broker-blue); }
 
-/* ---------- Section 3: Purchasing Power ---------- */
-.power-grid { display: flex; gap: 18px; margin-bottom: 8px; }
-.power-tile {
-  flex: 1; background: var(--slate); border-radius: 4px; padding: 10px 14px;
-}
-.power-tile .label { font-size: 7.6pt; text-transform: uppercase; letter-spacing: 0.04em; color: #8a8a8c; }
-.power-tile .amount { font-family: 'Playfair Display', serif; font-weight: 700; font-size: 17pt; color: var(--broker-blue); margin-top: 2px; }
-.power-tile .sub { font-size: 7.8pt; color: #6b6b6d; margin-top: 2px; }
-.power-note { font-size: 9.2pt; margin-top: 6px; }
-.power-note.leverage { color: #6b6b6d; font-size: 8.6pt; margin-top: 8px; }
+/* ---------- Section 3: What This Equity Could Mean ---------- */
+/* Reuses .valuation-row / .valuation-figure / .valuation-detail from
+   Section 1 above -- same headline-figure-plus-supporting-copy layout,
+   just a different number and open-ended framing instead of a specific
+   purchase scenario (was "Move-Up Buyer Potential" -- Brian's call,
+   Cowork conversation Nov 2026: that assumed a bigger-home purchase,
+   which doesn't fit every recipient). No section-specific CSS needed.
 
 /* ---------- Section 4: Disclaimers ---------- */
 .disclaimers { font-size: 7.4pt; color: #6b6b6d; line-height: 1.5; }
@@ -425,28 +422,20 @@ h1, h2, h3 { margin: 0; padding: 0; }
   </div>
 </div>
 
-<!-- SECTION 3: FUTURE PURCHASING POWER -->
+<!-- SECTION 3: WHAT THIS EQUITY COULD MEAN -->
 <div class="section">
   <div class="section-head">
-    <div class="title-row"><span class="section-num">3</span><h2>Your Future Purchasing Power</h2></div>
-    <div class="section-sub">How this equity could work for your next move</div>
+    <div class="title-row"><span class="section-num">3</span><h2>What This Equity Could Mean for You</h2></div>
+    <div class="section-sub">Capital you could put to work, on your terms</div>
   </div>
-  <div class="power-grid">
-    <div class="power-tile">
-      <div class="label">Max Next-Home Down Payment Power</div>
+  <div class="valuation-row">
+    <div class="valuation-figure">
+      <div class="label">Equity You Could Access</div>
       <div class="amount">{{ c.down_payment_power | money }}</div>
-      <div class="sub">Based on accessing up to 80% of your current equity, leaving a buffer for closing costs</div>
     </div>
-    <div class="power-tile">
-      <div class="label">Move-Up Buyer Potential</div>
-      <div class="amount">{{ c.move_up_down_payment_pct | pct }}</div>
-      <div class="sub">Down payment on a {{ c.target_price | money }} home
-        {%- if c.pmi_eliminated %}, eliminating PMI entirely{% elif c.move_up_down_payment_pct is not none %}, still well above a typical minimum down payment{% endif %}
-      </div>
+    <div class="valuation-detail">
+      Based on accessing up to 80% of your current equity, leaving a buffer for closing costs. This capital could fund a move to a new home, a second or investment property, a major renovation, or simply sit as a reserve you can access when the timing is right. Happy to walk through what makes sense for your plans.
     </div>
-  </div>
-  <div class="power-note leverage">
-    This equity can also fully fund a second property purchase, a substantial renovation, or serve as a cash reserve as you plan your next move. Happy to walk through what fits your goals best.
   </div>
 </div>
 
