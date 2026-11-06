@@ -772,11 +772,11 @@ function populateReview(data) {
 
   const avmHelper = document.getElementById('avmHelper');
   const parts2 = [];
-  if (fa.est) parts2.push('First American ' + fa.est.toLocaleString());
-  if (zi.est) parts2.push('Zillow ' + zi.est.toLocaleString());
-  if (re.est) parts2.push('Remine ' + re.est.toLocaleString());
-  if (cl.est) parts2.push('CoreLogic RealAVM ' + cl.est.toLocaleString());
-  avmHelper.textContent = parts2.length ? 'Defaulted to the average of: ' + parts2.map(p => '$' + p).join(', ') + '. ' + (parts2.length > 1 ? 'All ' + parts2.length + ' will' : 'This will') + ' show on the PDF.' : '';
+  if (fa.est) parts2.push('First American $' + fa.est.toLocaleString());
+  if (zi.est) parts2.push('Zillow $' + zi.est.toLocaleString());
+  if (re.est) parts2.push('Remine $' + re.est.toLocaleString());
+  if (cl.est) parts2.push('CoreLogic RealAVM $' + cl.est.toLocaleString());
+  avmHelper.textContent = parts2.length ? 'Defaulted to the average of: ' + parts2.join(', ') + '. ' + (parts2.length > 1 ? 'All ' + parts2.length + ' will' : 'This will') + ' show on the PDF.' : '';
 
   warnBox.innerHTML = '';
   if (data.parse_warnings && data.parse_warnings.length) {

@@ -63,6 +63,32 @@ def _first(pattern, text, flags=0, group=1):
     return m.group(group) if m else None
 
 
+def _reorder_simple_trust_name(raw):
+    """Both Remine and CoreLogic file a simple, one-person revocable
+    trust in the same public-record order as an individual owner --
+    "<Last> <First> <MiddleInitial> Trust" (e.g. "Lindland Matthew K
+    Trust") -- rather than the "Matthew K Lindland Trust" a human would
+    write. This ONLY reorders that one narrow, unambiguous shape: exactly
+    three name tokens before a bare "Trust", with the third being a
+    single-letter middle initial. Anything else under the trust/entity
+    umbrella -- a joint trust ("... & Melissa G Trust"), a "Family
+    Trust" or "Revocable Trust" with no individual name structure to
+    reorder, an LLC/Corp/etc -- is returned unchanged rather than
+    guessed at: those shapes don't reliably map onto "last first
+    middle", and a wrong guess on a client-facing document is worse
+    than the original (still perfectly readable) order. The agent
+    reviews/overwrites the client name before anything is generated
+    regardless."""
+    m = re.match(
+        r"^([A-Za-z][A-Za-z'\-]*)\s+([A-Za-z][A-Za-z'\-]*)\s+([A-Za-z])\.?\s+Trust$",
+        raw.strip(), re.I,
+    )
+    if not m:
+        return raw
+    last, first, middle = m.groups()
+    return f"{first.title()} {middle.upper()} {last.title()} Trust"
+
+
 def _format_owner_names(raw):
     """Remine prints owner names in public-record order -- 'LAST FIRST
     MIDDLE, LAST2 FIRST2 MIDDLE2' (e.g. 'JENKS NATHAN, UMIEL MARK R').
@@ -71,13 +97,14 @@ def _format_owner_names(raw):
     it does NOT need to be perfect, since the agent reviews/overwrites
     the client name before anything is generated. Falls back to a
     title-cased version of the raw string if the split looks unusual
-    (e.g. a business/trust entity name instead of a person)."""
+    (e.g. a business/trust entity name instead of a person), except for
+    the one simple-trust shape _reorder_simple_trust_name handles."""
     if not raw:
         return ""
     # Entities (trusts, LLCs, etc.) aren't "LAST FIRST" -- keep the name as is.
     raw = re.sub(r"\s*\S?\s*absentee\s*$", "", raw, flags=re.I).strip()
     if re.search(r"\b(TRUST|TRUSTEE|LLC|L\.L\.C|INC|CORP|LP|LTD|ESTATE|PARTNERS|HOLDINGS|BANK|ASSOCIATION)\b", raw, re.I):
-        return raw.title()
+        return _reorder_simple_trust_name(raw.title())
     people = [p.strip() for p in raw.split(",") if p.strip()]
     out = []
     for p in people:
@@ -804,15 +831,20 @@ def parse_corelogic_pdf(pages_text, full_text=None, pages_words=None):
     # ---- Owner name / mailing address (OWNER INFORMATION block) ----
     owner_m = re.search(r"Owner Name\s+(.+?)\s+Owner Occupied\b", full_text)
     data["owner_names_raw"] = _clean_ws(owner_m.group(1)) if owner_m else ""
-    # CoreLogic prints owner names in normal "First Last" / entity-name
-    # order already (unlike Remine's public-record "LAST FIRST" order),
-    # so -- unlike the Remine path above -- this is NOT run through
-    # _format_owner_names()'s last/first swap, which would wrongly
-    # reverse an already-correct name. Only confirmed against one sample
-    # (a trust name, where order doesn't matter either way); the agent
-    # reviews/overwrites client_name before anything is generated
-    # regardless.
-    data["owner_names_display"] = data["owner_names_raw"]
+    # CoreLogic files individual owner names in the same public-record
+    # "Last First Middle" order as Remine -- confirmed via the Buyer
+    # Name/Seller Name fields in the sale-history section of a real
+    # sample ("Lindland Matthew K", "Lindland Melissa G"). This does NOT
+    # route through the general Remine _format_owner_names() reorder,
+    # though: that function's two-owner handling assumes Remine's
+    # comma-separated "LAST FIRST, LAST2 FIRST2" shape, but this sample's
+    # own joint-owner fields use "&" instead ("Lindland Matthew K &
+    # Melissa G") -- reusing that logic as-is would silently truncate a
+    # name (dropping the middle initial and everything after it) rather
+    # than reorder it correctly. Only the narrow, safe simple-trust case
+    # is handled for now; a real CoreLogic report with two individual
+    # (non-trust) owners hasn't been seen yet to build the rest against.
+    data["owner_names_display"] = _reorder_simple_trust_name(data["owner_names_raw"])
     data["owned_years"] = None
     if not owner_m:
         data["parse_warnings"].append("Could not find the owner name on record -- please fill it in manually.")
