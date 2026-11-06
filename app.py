@@ -91,8 +91,12 @@ def _default_fields_from_parsed(data):
         parts = last_sale_date.split("/")
         if len(parts) == 3:
             try:
-                yy = int(parts[2])
-                last_purchase_year = str(2000 + yy if yy < 50 else 1900 + yy)
+                yy_str = parts[2]
+                if len(yy_str) == 4:
+                    last_purchase_year = yy_str
+                else:
+                    yy = int(yy_str)
+                    last_purchase_year = str(2000 + yy if yy < 50 else 1900 + yy)
             except ValueError:
                 pass
 
@@ -490,7 +494,7 @@ PAGE = """
 <div class="wrap">
   <div class="hero">
     <h1>PEAR Report Generator</h1>
-    <p>Upload a Remine public-records report for a client's property, review and customize every figure, then generate a branded 1-page Professional Equity Assessment Report.</p>
+    <p>Upload a Remine or CoreLogic (Home Platform) public-records report for a client's property, review and customize every figure, then generate a branded 1-page Professional Equity Assessment Report.</p>
   </div>
 
   <div class="card">
@@ -525,7 +529,7 @@ PAGE = """
   </div>
 
   <div class="card">
-    <h2><span class="step-num">2</span>Upload Remine report</h2>
+    <h2><span class="step-num">2</span>Upload report</h2>
     <details style="margin-bottom:16px;border:1.5px solid var(--border-b);border-radius:var(--r);padding:12px 14px;">
       <summary style="cursor:pointer;font-weight:700;color:var(--blue);font-size:.85rem;">How to pull the right report from Remine</summary>
       <ol style="font-size:.82rem;color:var(--text);line-height:1.6;margin:10px 0 4px;padding-left:20px;">
@@ -540,13 +544,16 @@ PAGE = """
         <strong>Public Record Full isn't available on every property.</strong> If it's missing from the dropdown, pick <strong>Agent Full</strong> instead — it works fine here too, it just can't limit itself to only those four sections (Listing Details, Property Images, Schools, and Demographics will get pulled in too, and can't be unchecked). That's harmless, just a few extra pages; make sure Valuation, Property History, and Associated People are still checked, and all three valuation sources (First American, Remine, Zestimate) are checked.
       </div>
     </details>
+    <div class="field helper" style="margin-bottom:14px;">
+      Pulling from Home Platform instead? A CoreLogic <strong>Property Details</strong> report (the "Courtesy of Compass International Holdings" export, with RealAVM and Mortgage History) works too &mdash; upload it the same way below, no need to pick a format first.
+    </div>
     <div id="dropzone">
-      <p><strong>Drag &amp; drop the Remine PDF here</strong></p>
+      <p><strong>Drag &amp; drop the report here</strong></p>
       <p class="hint">or click to browse &mdash; one property at a time</p>
       <input type="file" id="fileInput" accept="application/pdf">
     </div>
     <div class="field helper" style="margin-top:10px;">
-      This needs the Remine public-records report (branded "Courtesy of [Agent Name]," with Active Mortgage, Net Equity, and a 3-source Valuation table) &mdash; not an RPR report, which doesn't carry loan/equity data.
+      Needs either a Remine public-records report (branded "Courtesy of [Agent Name]," with Active Mortgage, Net Equity, and a 3-source Valuation table) or a CoreLogic Property Details report (with RealAVM and Mortgage History) &mdash; not an RPR report, which doesn't carry loan/equity data from either source.
     </div>
     <div id="status"></div>
   </div>
@@ -683,7 +690,7 @@ reparseBtn.addEventListener('click', () => {
   hasUploaded = false;
   lastAutoFill = {};
   dz.classList.remove('locked');
-  dz.innerHTML = '<p><strong>Drag &amp; drop the Remine PDF here</strong></p><p class="hint">or click to browse &mdash; one property at a time</p>';
+  dz.innerHTML = '<p><strong>Drag &amp; drop the report here</strong></p><p class="hint">or click to browse &mdash; one property at a time</p>';
   reviewCard.classList.add('hidden');
   statusEl.textContent = '';
   // Clear every review field, not just the tracking -- otherwise a
@@ -749,7 +756,10 @@ function populateReview(data) {
   let year = '';
   if (data.last_sale_date) {
     const parts = data.last_sale_date.split('/');
-    if (parts.length === 3) { let yy = parseInt(parts[2],10); year = (yy < 50 ? 2000+yy : 1900+yy); }
+    if (parts.length === 3) {
+      if (parts[2].length === 4) { year = parts[2]; }
+      else { let yy = parseInt(parts[2],10); year = (yy < 50 ? 2000+yy : 1900+yy); }
+    }
   }
   smartSet('f_last_purchase_year', year);
 
@@ -946,7 +956,7 @@ BATCH_PAGE = """
 <div class="wrap">
   <div class="hero">
     <h1>PEAR Report Generator: Batch Mode</h1>
-    <p>Drag and drop several Remine reports at once to generate a PDF for each, using the same defaults a single upload would auto-fill (no per-file review). If one property needs a correction, regenerate just that one through the normal single-report flow.</p>
+    <p>Drag and drop several Remine or CoreLogic reports at once to generate a PDF for each, using the same defaults a single upload would auto-fill (no per-file review). If one property needs a correction, regenerate just that one through the normal single-report flow.</p>
   </div>
 
   <div class="card">
@@ -972,12 +982,12 @@ BATCH_PAGE = """
   </div>
 
   <div class="card">
-    <h2><span class="step-num">2</span>Upload Remine reports</h2>
+    <h2><span class="step-num">2</span>Upload reports</h2>
     <div class="field helper" style="margin-bottom:14px;">
-      Each report auto-fills the same way a single upload would: value defaults to the average of the 3 AVMs, mortgage balance and client name come straight from the parsed record, and the move-up target price defaults to ~25% above value. None of that is editable per file here.
+      Remine and CoreLogic reports can be mixed in the same batch &mdash; the format is detected per file. Each report auto-fills the same way a single upload would: value defaults to the average of whatever AVM sources that report has, and mortgage balance and client name come straight from the parsed record. None of that is editable per file here.
     </div>
     <div id="dropzone">
-      <p><strong>Drag &amp; drop multiple Remine PDFs here</strong></p>
+      <p><strong>Drag &amp; drop multiple reports here</strong></p>
       <p class="hint">or click to browse and select several at once</p>
       <input type="file" id="fileInput" accept="application/pdf" multiple>
     </div>
@@ -1280,12 +1290,12 @@ MAILER_PAGE = """
   </div>
 
   <div class="card" id="uploadCard">
-    <h2><span class="step-num">3</span>Upload Remine reports</h2>
+    <h2><span class="step-num">3</span>Upload reports</h2>
     <div class="field helper" style="margin-bottom:14px;">
-      Each report auto-fills the same way batch mode does: value defaults to the average of the 3 AVMs, mortgage balance comes straight from the parsed record, and the move-up target price defaults to ~25% above value. Next you'll get a chance to confirm or correct the owner name and property address for each one before anything gets generated.
+      Remine and CoreLogic reports can be mixed in the same batch &mdash; the format is detected per file. Each report auto-fills the same way batch mode does: value defaults to the average of whatever AVM sources that report has, and mortgage balance comes straight from the parsed record. Next you'll get a chance to confirm or correct the owner name and property address for each one before anything gets generated.
     </div>
     <div id="dropzone">
-      <p><strong>Drag &amp; drop multiple Remine PDFs here</strong></p>
+      <p><strong>Drag &amp; drop multiple reports here</strong></p>
       <p class="hint">or click to browse and select several at once</p>
       <input type="file" id="fileInput" accept="application/pdf" multiple>
     </div>

@@ -550,21 +550,24 @@ def _parse_date_mmddyyyy(s):
 
 
 def _parse_mortgage_history_latest(full_text):
-    """Pulls the most recent loan out of CoreLogic's "Mortgage History"
-    table. That table lists multiple loans (refis, 2nd liens, the
-    original purchase mortgage) as side-by-side columns, one row per
-    field -- confirmed against a real sample (5331 N Magnolia Ave,
-    Chicago) to be sorted newest-first by "Mortgage Date". In that
-    sample, Date/Amount/Term lined up 1:1 with every column, but
-    "Mortgage Int Rate" only printed a value for 3 of 5 columns (two
-    adjustable-rate loans had no rate on record at all) -- so reading
-    "the first number on the line = the most recent column" is only
-    trustworthy when the count of values on a line matches the count of
-    dates. When a line's count falls short, that field is left None
-    rather than risk silently pairing the wrong loan's number with the
-    most recent one -- a wrong rate baked into a client-facing balance
-    estimate is worse than no estimate at all. Lender/title-company
-    fields are skipped entirely (free-text company names wrap across
+    """FALLBACK ONLY -- used when pdfplumber word-position data isn't
+    available (see _parse_mortgage_history_grid below for the real,
+    position-aware extractor parse_corelogic_pdf actually uses). This
+    version reads plain extracted text, which loses each value's column
+    position: when a loan's cell for a field is blank -- common here,
+    e.g. older adjustable-rate loans with no interest rate on record --
+    pdfplumber's text output just omits it rather than leaving a gap, so
+    counting tokens left-to-right silently shifts every later loan's
+    value into the wrong column. Confirmed against a real sample (5331 N
+    Magnolia Ave, Chicago): the "Mortgage Int Rate" row had 3 values for
+    5 loan columns, and the gaps were NOT only at the end, so even the
+    first value on the line isn't safe to assume matches the first
+    (most recent) column -- it can belong to a later one. This function
+    only trusts a line at all when its value count matches the date
+    count across the whole row, which is overly conservative (it would
+    have blanked out a real, correct rate for the most recent loan in
+    that sample) but never wrong. Lender/title-company fields are
+    skipped entirely either way (free-text company names wrap across
     lines with no reliable per-column boundary, and nothing downstream
     displays them anyway -- see parser.py's CoreLogic docstring)."""
     mh_start = full_text.find("MORTGAGE HISTORY")
@@ -597,7 +600,149 @@ def _parse_mortgage_history_latest(full_text):
     return result
 
 
-def parse_corelogic_pdf(pages_text, full_text=None):
+def _words_by_line(words, tolerance=2):
+    """Groups one pdfplumber page's extract_words() output into printed
+    text lines (words sharing a baseline), each a list of word dicts
+    sorted left-to-right by x0. `tolerance` merges tops within a couple
+    points of each other into the same line, since words on the same
+    printed row aren't always reported at the exact same `top`."""
+    lines = []
+    for w in sorted(words, key=lambda w: (w["top"], w["x0"])):
+        for line in lines:
+            if abs(line[0]["top"] - w["top"]) <= tolerance:
+                line.append(w)
+                break
+        else:
+            lines.append([w])
+    for line in lines:
+        line.sort(key=lambda w: w["x0"])
+    lines.sort(key=lambda line: line[0]["top"])
+    return lines
+
+
+def _match_label_row(line_words, label_tokens, exclude_next=None):
+    """line_words: one line's word dicts, left-to-right. label_tokens:
+    the exact leading words that identify this row (e.g. ["Mortgage",
+    "Term"]). exclude_next, if given, rejects the line when the word
+    right after the label matches it -- used to tell e.g. "Mortgage
+    Term" apart from "Mortgage Term Code", or "Mortgage Int Rate" apart
+    from "Mortgage Int Rate Type". Returns the remaining value words, or
+    None if this line doesn't match."""
+    if len(line_words) <= len(label_tokens):
+        return None
+    for tok, w in zip(label_tokens, line_words):
+        if w["text"] != tok:
+            return None
+    rest = line_words[len(label_tokens):]
+    if exclude_next and rest and rest[0]["text"] == exclude_next:
+        return None
+    return rest
+
+
+def _assign_to_columns(anchors, value_words, tolerance=25):
+    """Places each value word into whichever column anchor (an x0
+    position, taken from that loan block's own "Mortgage Date" row) it's
+    closest to, within `tolerance` points. This is the fix for the
+    problem _parse_mortgage_history_latest can't solve from plain text:
+    a blank cell in the middle of a row doesn't shift later values left
+    here, because each value is placed by where it actually sits on the
+    page, not by its position in a left-to-right count."""
+    result = [None] * len(anchors)
+    for w in value_words:
+        best_i, best_d = None, None
+        for i, a in enumerate(anchors):
+            d = abs(w["x0"] - a)
+            if best_d is None or d < best_d:
+                best_i, best_d = i, d
+        if best_d is not None and best_d <= tolerance:
+            result[best_i] = w["text"]
+    return result
+
+
+def _parse_mortgage_history_grid(pages_words):
+    """The real, position-aware mortgage-history extractor. CoreLogic's
+    Mortgage History section is a grid -- one column per recorded
+    mortgage, each with its own "Mortgage Date" entry used here as that
+    loan's column anchor -- but a report can also print a single
+    mortgage as its own one-column block further down (confirmed in the
+    real sample this was built against: a grid of 5 loans, then one more
+    standalone mortgage block below it). This walks every page's words
+    line by line from "MORTGAGE HISTORY" to "PROPERTY MAP", starting a
+    new block at each "Mortgage Date" row (using its value positions as
+    that block's column anchors) and assigning each subsequent Amount /
+    Int Rate / Term row's values to those anchors by x-position via
+    _assign_to_columns.
+
+    Returns a list of loan dicts ({date, date_raw, amount, rate,
+    term_years}), one per recorded mortgage found across every block, in
+    no particular order -- parse_corelogic_pdf picks the most recent of
+    these itself, by parsed date, rather than assuming column order.
+    Returns an empty list if no Mortgage History section is found."""
+    stream = []
+    started = False
+    for words in pages_words:
+        if not words:
+            continue
+        stopped = False
+        for line in _words_by_line(words):
+            text = " ".join(w["text"] for w in line)
+            if not started:
+                if text == "MORTGAGE HISTORY":
+                    started = True
+                continue
+            if text.startswith("PROPERTY MAP"):
+                stopped = True
+                break
+            stream.append(line)
+        if stopped:
+            break
+
+    blocks = []
+    current = None
+    for line in stream:
+        date_vals = _match_label_row(line, ["Mortgage", "Date"])
+        if date_vals is not None:
+            current = {
+                "anchors": [w["x0"] for w in date_vals],
+                "dates": [w["text"] for w in date_vals],
+                "amounts": None,
+                "rates": None,
+                "terms": None,
+            }
+            current["amounts"] = [None] * len(date_vals)
+            current["rates"] = [None] * len(date_vals)
+            current["terms"] = [None] * len(date_vals)
+            blocks.append(current)
+            continue
+        if current is None:
+            continue
+        amt_vals = _match_label_row(line, ["Mortgage", "Amount"])
+        if amt_vals is not None:
+            current["amounts"] = _assign_to_columns(current["anchors"], amt_vals)
+            continue
+        rate_vals = _match_label_row(line, ["Mortgage", "Int", "Rate"], exclude_next="Type")
+        if rate_vals is not None:
+            current["rates"] = _assign_to_columns(current["anchors"], rate_vals)
+            continue
+        term_vals = _match_label_row(line, ["Mortgage", "Term"], exclude_next="Code")
+        if term_vals is not None:
+            current["terms"] = _assign_to_columns(current["anchors"], term_vals)
+            continue
+
+    loans = []
+    for b in blocks:
+        for i, date_raw in enumerate(b["dates"]):
+            loans.append({
+                "date": _parse_date_mmddyyyy(date_raw),
+                "date_raw": date_raw,
+                "amount": _to_int_money(b["amounts"][i]),
+                "rate": _to_number(b["rates"][i]),
+                "term_years": _to_number(b["terms"][i]),
+            })
+    return loans
+
+
+def parse_corelogic_pdf(pages_text, full_text=None, pages_words=None):
     """Extracts property/equity data from a CoreLogic "Property Details"
     report (the format pulled through Home Platform / Compass, courtesy-
     of-branded, 3-page export). A second, parallel source to
@@ -726,7 +871,26 @@ def parse_corelogic_pdf(pages_text, full_text=None):
         mm, dd, yy = (int(x) for x in report_date_m.groups())
         report_date = date(2000 + yy if yy < 50 else 1900 + yy, mm, dd)
 
-    latest = _parse_mortgage_history_latest(full_text)
+    # Prefer the position-aware grid parser (accurate even when a loan's
+    # cell for a field is blank) whenever pdfplumber word-position data
+    # was handed in; fall back to the plain-text version otherwise -- see
+    # both functions' docstrings for why they can disagree.
+    latest = None
+    if pages_words:
+        loans = _parse_mortgage_history_grid(pages_words)
+        dated_loans = [l for l in loans if l["date"] is not None]
+        if dated_loans:
+            best = max(dated_loans, key=lambda l: l["date"])
+            latest = {
+                "date": best["date"],
+                "date_raw": best["date_raw"],
+                "amount": best["amount"],
+                "term_years": best["term_years"],
+                "rate": best["rate"],
+                "rate_reliable": best["rate"] is not None,
+            }
+    if latest is None:
+        latest = _parse_mortgage_history_latest(full_text)
     data["mortgage_orig_amount"] = latest["amount"] if latest else None
     data["mortgage_term_years"] = latest["term_years"] if latest else None
     data["mortgage_rate"] = latest["rate"] if (latest and latest["rate_reliable"]) else None
@@ -750,10 +914,13 @@ def parse_corelogic_pdf(pages_text, full_text=None):
         )
     elif latest:
         data["loan_balance_est"] = None
+        if latest.get("amount") and latest.get("date_raw"):
+            which = f"the most recent mortgage on record (${latest['amount']:,} from {latest['date_raw']})"
+        else:
+            which = "a mortgage history on record"
         data["parse_warnings"].append(
-            "Found a mortgage history on record, but couldn't reliably match the most recent "
-            "loan's interest rate to its own column (multiple loans, inconsistent data) -- "
-            "mortgage balance must be filled in manually."
+            f"Found {which}, but this report doesn't list its interest rate -- mortgage "
+            "balance must be filled in manually."
         )
     else:
         data["loan_balance_est"] = None
@@ -793,12 +960,17 @@ def detect_and_parse(file_bytes, filename=""):
     try:
         with pdfplumber.open(__import__("io").BytesIO(file_bytes)) as pdf:
             pages_text = [p.extract_text() or "" for p in pdf.pages]
-        full_text = "\n".join(pages_text)
+            full_text = "\n".join(pages_text)
+            # Word-level position data (for the Mortgage History grid --
+            # see _parse_mortgage_history_grid) has to be pulled while the
+            # pdfplumber file is still open, so this only happens here,
+            # once we already know it's worth the extra extraction pass.
+            pages_words = [p.extract_words() for p in pdf.pages] if "RealAVM" in full_text else None
     except Exception:
-        pages_text, full_text = [], ""
+        pages_text, full_text, pages_words = [], "", None
 
     if "RealAVM" in full_text:
-        data = parse_corelogic_pdf(pages_text, full_text)
+        data = parse_corelogic_pdf(pages_text, full_text, pages_words=pages_words)
     else:
         data = parse_remine_pdf(file_bytes)
 
