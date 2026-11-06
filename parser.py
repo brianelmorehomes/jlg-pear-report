@@ -2,16 +2,21 @@
 Extracts property/equity data from a Remine public-records report (the
 4-page "Courtesy of [Agent]" branded export pulled through MLS/MRED).
 
-This is intentionally built against ONE report format, not a generic PDF
-scraper: Remine's report is the only source that gives us an actual loan
+This module supports two report formats, each its own function: Remine
+public-records reports (parse_remine_pdf, below) and CoreLogic/Compass
+"Property Details" reports pulled through Home Platform
+(parse_corelogic_pdf, added Nov 2026 -- see its own docstring for why
+it's a meaningfully rougher source for the mortgage-balance figure
+specifically). Remine was originally the ONLY source supported, for one
+reason: it's the only one of the two that gives us an actual loan
 balance / net equity / percent equity for a property with zero manual
 entry required, which is what makes the PEAR report's Equity Breakdown
 section possible without asking the agent to know the client's mortgage
-by heart. (RPR reports -- the other common source agents pull -- never
+by heart. (RPR reports -- a third common source agents pull -- never
 carry loan data at all, so a parser built around RPR would still need a
-manual mortgage-balance field for every single report. Remine's report
-covers that gap, so it's the only source this app supports. See the
-Cowork conversation this was built in for the comparison.)
+manual mortgage-balance field for every single report; RPR support was
+scoped out for that reason and still is. See the Cowork conversation
+this was built in for the comparison.)
 
 Every extractor below is regex-based against pdfplumber's page-by-page
 text output and fails soft: a field that can't be found comes back as
@@ -24,6 +29,7 @@ Mortgage" block at all -- that's a real, valid state, not a parse
 failure).
 """
 import re
+from datetime import date
 
 import pdfplumber
 
@@ -502,18 +508,304 @@ def parse_remine_pdf(file_bytes):
     return data
 
 
+def _amortized_balance(principal, annual_rate_pct, term_years, start_date, as_of_date):
+    """Standard fixed-rate loan amortization. Returns the estimated
+    remaining principal balance as of `as_of_date`, or None if any input
+    is missing. This assumes the ORIGINATION rate held constant for the
+    whole loan term -- exactly right for a fixed-rate loan, a real
+    approximation for an adjustable-rate loan (this has no way to see
+    the actual rate-reset schedule, only the starting rate), and in
+    both cases blind to extra principal payments, a later refinance, or
+    a HELOC that isn't reflected in this report -- the same category of
+    caveat that's already on every PEAR report's Important Notes
+    section for Remine-sourced reports. Verified by hand against a few
+    worked examples (see the Cowork conversation this was built in)."""
+    if principal is None or annual_rate_pct is None or not term_years or start_date is None or as_of_date is None:
+        return None
+    months_elapsed = (as_of_date.year - start_date.year) * 12 + (as_of_date.month - start_date.month)
+    n = int(round(term_years * 12))
+    if n <= 0:
+        return None
+    if months_elapsed <= 0:
+        return int(round(principal))
+    if months_elapsed >= n:
+        return 0
+    r = (annual_rate_pct / 100) / 12
+    if r == 0:
+        return int(round(principal * (1 - months_elapsed / n)))
+    factor_n = (1 + r) ** n
+    factor_k = (1 + r) ** months_elapsed
+    return int(round(principal * (factor_n - factor_k) / (factor_n - 1)))
+
+
+def _parse_date_mmddyyyy(s):
+    m = re.match(r"(\d{2})/(\d{2})/(\d{4})", s or "")
+    if not m:
+        return None
+    month, day, year = int(m.group(1)), int(m.group(2)), int(m.group(3))
+    try:
+        return date(year, month, day)
+    except ValueError:
+        return None
+
+
+def _parse_mortgage_history_latest(full_text):
+    """Pulls the most recent loan out of CoreLogic's "Mortgage History"
+    table. That table lists multiple loans (refis, 2nd liens, the
+    original purchase mortgage) as side-by-side columns, one row per
+    field -- confirmed against a real sample (5331 N Magnolia Ave,
+    Chicago) to be sorted newest-first by "Mortgage Date". In that
+    sample, Date/Amount/Term lined up 1:1 with every column, but
+    "Mortgage Int Rate" only printed a value for 3 of 5 columns (two
+    adjustable-rate loans had no rate on record at all) -- so reading
+    "the first number on the line = the most recent column" is only
+    trustworthy when the count of values on a line matches the count of
+    dates. When a line's count falls short, that field is left None
+    rather than risk silently pairing the wrong loan's number with the
+    most recent one -- a wrong rate baked into a client-facing balance
+    estimate is worse than no estimate at all. Lender/title-company
+    fields are skipped entirely (free-text company names wrap across
+    lines with no reliable per-column boundary, and nothing downstream
+    displays them anyway -- see parser.py's CoreLogic docstring)."""
+    mh_start = full_text.find("MORTGAGE HISTORY")
+    if mh_start == -1:
+        return None
+
+    mh_chunk = full_text[mh_start:mh_start + 1500]
+
+    def _line_tail(label):
+        m = re.search(re.escape(label) + r"\s+([^\n]*)", mh_chunk)
+        return m.group(1) if m else ""
+
+    dates = re.findall(r"\d{2}/\d{2}/\d{4}", _line_tail("Mortgage Date"))
+    if not dates:
+        return None
+
+    amounts = re.findall(r"\$([\d,]+)", _line_tail("Mortgage Amount"))
+    terms = re.findall(r"\d+", _line_tail("Mortgage Term"))
+    rates = re.findall(r"\d+\.?\d*", _line_tail("Mortgage Int Rate"))
+
+    n = len(dates)
+    result = {
+        "date": _parse_date_mmddyyyy(dates[0]),
+        "date_raw": dates[0],
+        "amount": _to_int_money(amounts[0]) if len(amounts) == n and amounts else None,
+        "term_years": _to_number(terms[0]) if len(terms) == n and terms else None,
+        "rate": _to_number(rates[0]) if len(rates) == n and rates else None,
+    }
+    result["rate_reliable"] = len(rates) == n
+    return result
+
+
+def parse_corelogic_pdf(pages_text, full_text=None):
+    """Extracts property/equity data from a CoreLogic "Property Details"
+    report (the format pulled through Home Platform / Compass, courtesy-
+    of-branded, 3-page export). A second, parallel source to
+    parse_remine_pdf -- see that function's docstring, and the module
+    docstring above, for why Remine was the only source originally
+    supported. This format doesn't have Remine's computed current loan
+    balance: it only lists every mortgage ever recorded against the
+    property (amount/rate/term AT ORIGINATION, not a current balance),
+    so loan_balance_est here is either a best-effort amortization
+    estimate off the most recent recorded loan (see
+    _amortized_balance / _parse_mortgage_history_latest above), or None
+    when the data to do that reliably isn't there -- in which case the
+    agent fills it in manually on the review screen, same as any Remine
+    report with no mortgage on file. Unlike Remine, this format also has
+    no independent "Percent Equity" figure, so a missing/unreliable loan
+    balance here can NEVER be defaulted to $0 the way Remine's 100%-
+    equity fallback does -- there's nothing to confirm a payoff against.
+
+    Returns the SAME dict shape as parse_remine_pdf (every key present,
+    missing fields None/"") so app.py and the template don't need to
+    know which source produced a given report.
+
+    Built and tested against one real sample (5331 N Magnolia Ave,
+    Chicago -- see the Cowork conversation this was built in). Like
+    parser.py's Remine support, expect this to need adjustment against
+    the next few real CoreLogic pulls that break the template in some
+    new spot -- it's the same lesson learned there, just not re-learned
+    yet here.
+    """
+    if full_text is None:
+        full_text = "\n".join(pages_text)
+
+    data = {
+        "source_format": "corelogic",
+        "parse_warnings": [],
+    }
+
+    # ---- Header: address (strip the trailing ", <County> County") ----
+    first_line = pages_text[0].split("\n")[0] if pages_text and pages_text[0] else ""
+    addr_m = re.match(r"^(.*?),\s*[A-Za-z .]+\s+County\s*$", first_line)
+    data["full_address"] = _clean_ws(addr_m.group(1)) if addr_m else _clean_ws(first_line)
+    data["status"] = ""  # this report format has no Remine-style status badge; unused downstream either way
+    if not addr_m:
+        data["parse_warnings"].append("Could not cleanly split the property address from the county name on the header line -- please double-check it.")
+
+    # ---- Characteristics block (beds/baths/sqft/year/lot/type) ----
+    char_start = full_text.find("CHARACTERISTICS")
+    char_chunk = full_text[char_start:char_start + 1200] if char_start != -1 else ""
+
+    data["beds"] = _to_int_money(_first(r"Bedrooms\s+(\d+)", char_chunk))
+    data["baths"] = _to_int_money(_first(r"Total Baths\s+(\d+)", char_chunk))
+    data["sqft"] = _to_int_money(_first(r"Building Sq Ft\s+([\d,]+)", char_chunk))
+    data["year_built"] = _to_int_money(_first(r"Year Built\s+(\d{4})", char_chunk))
+    data["lot_acres"] = _to_number(_first(r"Lot Acres\s+([\d.]+)", char_chunk))
+    data["property_type"] = _clean_ws(_first(r"Land Use\s+(\S+)", char_chunk) or "")
+    if not char_chunk:
+        data["parse_warnings"].append("Could not find the Characteristics section (beds/baths/sqft/year built) -- please fill these in manually.")
+
+    # ---- Owner name / mailing address (OWNER INFORMATION block) ----
+    owner_m = re.search(r"Owner Name\s+(.+?)\s+Owner Occupied\b", full_text)
+    data["owner_names_raw"] = _clean_ws(owner_m.group(1)) if owner_m else ""
+    # CoreLogic prints owner names in normal "First Last" / entity-name
+    # order already (unlike Remine's public-record "LAST FIRST" order),
+    # so -- unlike the Remine path above -- this is NOT run through
+    # _format_owner_names()'s last/first swap, which would wrongly
+    # reverse an already-correct name. Only confirmed against one sample
+    # (a trust name, where order doesn't matter either way); the agent
+    # reviews/overwrites client_name before anything is generated
+    # regardless.
+    data["owner_names_display"] = data["owner_names_raw"]
+    data["owned_years"] = None
+    if not owner_m:
+        data["parse_warnings"].append("Could not find the owner name on record -- please fill it in manually.")
+
+    mail_m = re.search(r"Mailing Address\s+(.+?)\s+Ownership Right Vesting\b", full_text)
+    mailing_address_raw = _clean_ws(mail_m.group(1)) if mail_m else ""
+
+    def _norm_addr(s):
+        return re.sub(r"[^A-Z0-9]", "", (s or "").upper())
+
+    if mailing_address_raw and _norm_addr(mailing_address_raw) != _norm_addr(data.get("full_address")):
+        data["mailing_address"] = mailing_address_raw
+        data["parse_warnings"].append(
+            "Public county property records show a mailing address on file for this owner "
+            "that's different from the property itself (common for rentals or absentee "
+            "owners) -- pre-filled below as the mailing address, double-check it before "
+            "mailing anything."
+        )
+    else:
+        data["mailing_address"] = ""
+
+    # ---- RealAVM valuation (this report's one AVM source, vs Remine's three) ----
+    est_m = re.search(r"RealAVM\S*\s+\$([\d,]+)", full_text)
+    range_m = re.search(r"RealAVM\S*\s*Range\s+\$([\d,]+)\s*-\s*\$([\d,]+)", full_text)
+    data["valuations"] = {}
+    if est_m:
+        entry = {"est": _to_int_money(est_m.group(1)), "low": None, "high": None}
+        if range_m:
+            entry["low"] = _to_int_money(range_m.group(1))
+            entry["high"] = _to_int_money(range_m.group(2))
+        data["valuations"]["corelogic_realavm"] = entry
+        data["value_est"] = entry["est"]
+    else:
+        data["value_est"] = None
+        data["parse_warnings"].append("Could not find the RealAVM estimated value -- please fill in the market value manually.")
+
+    ests = [v["est"] for v in data["valuations"].values() if v.get("est") is not None]
+    data["value_est_avg"] = round(sum(ests) / len(ests)) if ests else None
+
+    # ---- Last sale: "LAST MARKET SALE & SALES HISTORY" section's clean
+    # Settle Date / Sale Price pair -- the top stat block has the same two
+    # facts under "Sale Date"/"Sale Price" labels, but as a labels-row-
+    # then-values-row layout (like Beds/Baths up there), not a clean
+    # adjacent pair, so pulling from it directly misses. ----
+    sale_start = full_text.find("LAST MARKET SALE")
+    sale_chunk = full_text[sale_start:sale_start + 800] if sale_start != -1 else ""
+    data["last_sale_price"] = _to_int_money(_first(r"Sale Price\s+\$([\d,]+)", sale_chunk))
+    data["last_sale_date"] = _first(r"Settle Date\s+(\d{2}/\d{2}/\d{4})", sale_chunk)
+    if not sale_chunk:
+        data["parse_warnings"].append("Could not find the Last Market Sale section -- last purchase price/date left blank, please fill in manually if relevant.")
+
+    # ---- Mortgage history -> estimated current balance ----
+    report_date_m = re.search(r"Generated on:\s*(\d{2})/(\d{2})/(\d{2})", full_text)
+    report_date = None
+    if report_date_m:
+        mm, dd, yy = (int(x) for x in report_date_m.groups())
+        report_date = date(2000 + yy if yy < 50 else 1900 + yy, mm, dd)
+
+    latest = _parse_mortgage_history_latest(full_text)
+    data["mortgage_orig_amount"] = latest["amount"] if latest else None
+    data["mortgage_term_years"] = latest["term_years"] if latest else None
+    data["mortgage_rate"] = latest["rate"] if (latest and latest["rate_reliable"]) else None
+    # Lender/type aren't attempted for this format -- see
+    # _parse_mortgage_history_latest's docstring -- and nothing
+    # downstream displays them for either format anyway.
+    data["mortgage_type"] = ""
+    data["mortgage_lender"] = ""
+
+    if latest and latest["rate_reliable"] and latest["amount"] and latest["term_years"] and latest["date"] and report_date:
+        data["loan_balance_est"] = _amortized_balance(
+            latest["amount"], latest["rate"], latest["term_years"], latest["date"], report_date
+        )
+        data["parse_warnings"].append(
+            "This report doesn't provide a current loan balance the way Remine does -- the "
+            f"mortgage balance shown is an amortization estimate off the most recent recorded "
+            f"loan (${latest['amount']:,} at {latest['rate']}% from {latest['date_raw']}), "
+            "assuming that rate held constant and no extra principal payments, refinance, or "
+            "HELOC since. Treat it as rougher than the usual estimate and double-check before "
+            "sending."
+        )
+    elif latest:
+        data["loan_balance_est"] = None
+        data["parse_warnings"].append(
+            "Found a mortgage history on record, but couldn't reliably match the most recent "
+            "loan's interest rate to its own column (multiple loans, inconsistent data) -- "
+            "mortgage balance must be filled in manually."
+        )
+    else:
+        data["loan_balance_est"] = None
+        data["parse_warnings"].append(
+            "No mortgage history found on record for this property -- fill in the mortgage "
+            "balance manually, or confirm with the owner whether it's paid off. (Unlike "
+            "Remine, this report has no separate equity/percent-equity figure to confirm a "
+            "payoff against, so this can't default to $0 the way a Remine report with no "
+            "mortgage on file does.)"
+        )
+
+    data["percent_equity"] = None
+    data["net_equity_est"] = None
+    if data["value_est"] is not None and data["loan_balance_est"] is not None:
+        data["net_equity_est"] = data["value_est"] - data["loan_balance_est"]
+        data["percent_equity"] = round(data["net_equity_est"] / data["value_est"] * 100) if data["value_est"] else None
+
+    data["contact_name"] = ""
+    data["contact_phone"] = ""
+    data["contact_email"] = ""
+
+    return data
+
+
 def detect_and_parse(file_bytes, filename=""):
-    """Entry point app.py calls. Currently Remine-only per Brian's call --
-    RPR support was scoped out since Remine covers everything RPR does
-    for market valuation PLUS the loan/equity data RPR never has (see
-    module docstring). If a non-Remine PDF is uploaded, this still
-    attempts the Remine parse (harmless -- it'll just come back mostly
-    empty with warnings) so the agent lands on a normal, editable review
-    screen instead of a hard error, and can fill in every field by hand."""
-    data = parse_remine_pdf(file_bytes)
+    """Entry point app.py calls. Sniffs the report format from its text
+    content and routes to the matching parser -- Remine (parse_remine_pdf)
+    or CoreLogic/Compass "Property Details" (parse_corelogic_pdf), added
+    Nov 2026 once Home Platform made that format easier for Brian to pull
+    than Remine. "RealAVM" is CoreLogic's own trademarked valuation
+    product name and doesn't appear anywhere in a Remine report, so its
+    presence is a reliable signal either way. If neither format is
+    recognized, this still attempts the Remine parse (harmless -- it'll
+    just come back mostly empty with warnings) so the agent lands on a
+    normal, editable review screen instead of a hard error, and can fill
+    in every field by hand."""
+    try:
+        with pdfplumber.open(__import__("io").BytesIO(file_bytes)) as pdf:
+            pages_text = [p.extract_text() or "" for p in pdf.pages]
+        full_text = "\n".join(pages_text)
+    except Exception:
+        pages_text, full_text = [], ""
+
+    if "RealAVM" in full_text:
+        data = parse_corelogic_pdf(pages_text, full_text)
+    else:
+        data = parse_remine_pdf(file_bytes)
+
     if not data.get("full_address") and not data.get("value_est"):
         data["parse_warnings"].append(
-            "This doesn't look like a Remine public-records report -- little or nothing could be extracted. "
-            "You can still fill in every field manually below."
+            "This doesn't look like a Remine public-records report or a CoreLogic Property "
+            "Details report -- little or nothing could be extracted. You can still fill in "
+            "every field manually below."
         )
     return data

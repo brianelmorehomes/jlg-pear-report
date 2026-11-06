@@ -98,7 +98,7 @@ def _default_fields_from_parsed(data):
 
     avms = []
     valuations = data.get("valuations") or {}
-    for label, key in (("First American", "first_american"), ("Zillow", "zillow"), ("Remine", "remine")):
+    for label, key in (("First American", "first_american"), ("Zillow", "zillow"), ("Remine", "remine"), ("CoreLogic RealAVM", "corelogic_realavm")):
         v = valuations.get(key) or {}
         if v.get("est") is not None:
             avms.append({"label": label, "est": v.get("est"), "low": v.get("low"), "high": v.get("high")})
@@ -591,6 +591,9 @@ PAGE = """
     <input type="hidden" id="f_avm_remine_est">
     <input type="hidden" id="f_avm_remine_low">
     <input type="hidden" id="f_avm_remine_high">
+    <input type="hidden" id="f_avm_corelogic_est">
+    <input type="hidden" id="f_avm_corelogic_low">
+    <input type="hidden" id="f_avm_corelogic_high">
 
     <div id="livePreview" style="margin-top:16px;font-size:.85rem;color:var(--muted);"></div>
 
@@ -652,7 +655,8 @@ const reparseBtn = document.getElementById('reparseBtn');
 const FIELD_IDS = ['full_address','beds','baths','sqft','year_built','property_type',
                     'value','loan_balance','last_purchase_price','last_purchase_year',
                     'avm_fa_est','avm_fa_low','avm_fa_high','avm_zillow_est','avm_zillow_low','avm_zillow_high',
-                    'avm_remine_est','avm_remine_low','avm_remine_high'];
+                    'avm_remine_est','avm_remine_low','avm_remine_high',
+                    'avm_corelogic_est','avm_corelogic_low','avm_corelogic_high'];
 
 // Tracks the last value THIS SCRIPT auto-filled into each field, so a
 // second /parse response (e.g. an accidental second click on the
@@ -750,17 +754,19 @@ function populateReview(data) {
   smartSet('f_last_purchase_year', year);
 
   const avm = data.valuations || {};
-  const fa = avm.first_american || {}, zi = avm.zillow || {}, re = avm.remine || {};
+  const fa = avm.first_american || {}, zi = avm.zillow || {}, re = avm.remine || {}, cl = avm.corelogic_realavm || {};
   smartSet('f_avm_fa_est', fa.est ?? ''); smartSet('f_avm_fa_low', fa.low ?? ''); smartSet('f_avm_fa_high', fa.high ?? '');
   smartSet('f_avm_zillow_est', zi.est ?? ''); smartSet('f_avm_zillow_low', zi.low ?? ''); smartSet('f_avm_zillow_high', zi.high ?? '');
   smartSet('f_avm_remine_est', re.est ?? ''); smartSet('f_avm_remine_low', re.low ?? ''); smartSet('f_avm_remine_high', re.high ?? '');
+  smartSet('f_avm_corelogic_est', cl.est ?? ''); smartSet('f_avm_corelogic_low', cl.low ?? ''); smartSet('f_avm_corelogic_high', cl.high ?? '');
 
   const avmHelper = document.getElementById('avmHelper');
   const parts2 = [];
   if (fa.est) parts2.push('First American ' + fa.est.toLocaleString());
   if (zi.est) parts2.push('Zillow ' + zi.est.toLocaleString());
   if (re.est) parts2.push('Remine ' + re.est.toLocaleString());
-  avmHelper.textContent = parts2.length ? 'Defaulted to the average of: ' + parts2.map(p => '$' + p).join(', ') + '. All three will show on the PDF.' : '';
+  if (cl.est) parts2.push('CoreLogic RealAVM ' + cl.est.toLocaleString());
+  avmHelper.textContent = parts2.length ? 'Defaulted to the average of: ' + parts2.map(p => '$' + p).join(', ') + '. ' + (parts2.length > 1 ? 'All ' + parts2.length + ' will' : 'This will') + ' show on the PDF.' : '';
 
   warnBox.innerHTML = '';
   if (data.parse_warnings && data.parse_warnings.length) {
@@ -1707,7 +1713,7 @@ def generate():
         )
 
         avms = []
-        for label, prefix in (("First American", "avm_fa"), ("Zillow", "avm_zillow"), ("Remine", "avm_remine")):
+        for label, prefix in (("First American", "avm_fa"), ("Zillow", "avm_zillow"), ("Remine", "avm_remine"), ("CoreLogic RealAVM", "avm_corelogic")):
             est = _num(request.form.get(f"{prefix}_est"))
             if est is not None:
                 avms.append({
